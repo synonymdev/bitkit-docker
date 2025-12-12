@@ -338,4 +338,4 @@ Do not use for production. LNURL server is vibe-coded and not fully spec complia
 
 ## License
 
-This project is released into the public domain under the [Unlicense](LICENSE).
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
