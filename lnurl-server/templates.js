@@ -460,7 +460,7 @@ const renderRootPage = ({ health, domain }) => {
     const content = container({
         content: `
             ${header({
-                title: 'Bitkit LNURL Dev Server'
+                title: 'Bitkit Dev Server'
             })}
 
             <div class="cards-container">
@@ -1090,7 +1090,7 @@ const renderDecoderPage = () => {
     });
 
     return mainLayout({
-        title: 'Lightning & LNURL Decode - Bitkit LNURL Dev Server',
+        title: 'Lightning & LNURL Decode - Bitkit Dev Server',
         content
     });
 };

@@ -334,8 +334,9 @@ curl -s http://localhost:3000/balance | jq
 
 ## Production Considerations
 
-Do not use for production. LNURL server is vibe-coded and not fully spec compliant.
+Do not use for production. Bitkit Dev server is vibe-coded and not optimised.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License.
+See the [LICENSE](./LICENSE) file for more details.
