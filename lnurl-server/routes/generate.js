@@ -43,7 +43,7 @@ router.get('/:type/qr', asyncHandler(async (req, res) => {
 const generateLnurl = async (type, query) => {
     switch (type) {
         case 'withdraw':
-            return await generateLnurlWithdraw();
+            return await generateLnurlWithdraw(query);
         case 'pay':
             return await generateLnurlPay(query);
         case 'channel':
@@ -57,8 +57,16 @@ const generateLnurl = async (type, query) => {
     }
 };
 
-const generateLnurlWithdraw = async () => {
-    const url = `${config.domain}/withdraw`;
+const generateLnurlWithdraw = async (query) => {
+    const { minWithdrawable, maxWithdrawable } = query;
+
+    // Build URL with optional params
+    let url = `${config.domain}/withdraw`;
+    const params = new URLSearchParams();
+    if (minWithdrawable) params.append('minWithdrawable', minWithdrawable);
+    if (maxWithdrawable) params.append('maxWithdrawable', maxWithdrawable);
+    if (params.toString()) url += `?${params.toString()}`;
+
     const lnurl = encode(url);
     const qrCode = await QRCode.toDataURL(lnurl, {
         width: 256,

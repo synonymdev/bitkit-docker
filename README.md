@@ -136,18 +136,17 @@ docker compose logs -f bitcoind
 
 #### Bech32 LNURL Pay
 
-- checkout this repo locally
-- in `Env.kt`, change `ElectrumServers.REGTEST` to `"tcp://__YOUR_NETWORK_IP__:60001"`
-- uninstall old app and install fresh one
-- set DOMAIN in `docker compose.yml` to `http://__YOUR_NETWORK_IP__:3000`
+- in `Env.{kt,swift}`, use for REGTEST electrum server: `"tcp://localhost:60001"`
+- in app, wipe current wallet data and create fresh one
 - run `docker compose up --build -d`
 - mine blocks: `./bitcoin-cli mine 101`
 - fund onchain wallet: `./bitcoin-cli fund`
+- send funds to the app's wallet address: `./bitcoin-cli send 0.25`
 - mine block: `./bitcoin-cli mine 1`
 - get local LND nodeID and open channel
   - `http://localhost:3000/health`
   - `curl -s http://localhost:3000/health | jq -r .lnd.uris`
-  - copy, replace `127.0.0.1` with `__YOUR_NETWORK_IP__` and paste into app, then complete the flow
+  - `android` copy, replace `127.0.0.1` with `__YOUR_NETWORK_IP__` and paste into app, then complete the flow
   - `./bitcoin-cli mine 3`
 - generate LNURL pay: `http://localhost:3000/generate/pay`
 - paste lnurl into app
@@ -156,14 +155,13 @@ docker compose logs -f bitcoind
 #### Lightning Address
 
 - `ngrok http 3000`
-- change `DOMAIN` in `docker compose.yml` to `__NGROK_URL__`
+- change `DOMAIN` in `docker-compose.yml` to `__NGROK_URL__`
 - `docker compose down` if running
 - `docker compose up --build -d`
 - `http://localhost:3000/.well-known/lnurlp/alice`
 - copy the email-like lightning address and paste into app
 
 #### LNURL-Channel
-
 
 - (optional) use physical phone so localhost is usable via `adb reverse`
 - (optional) reset `bitkit-docker` state
@@ -174,7 +172,7 @@ docker compose logs -f bitcoind
 - `adb reverse tcp:9735 tcp:9735`
 - mine 101 blocks: `./bitcoin-cli fund`
 - fund LND wallet:
-  - get address: `curl -s http://localhost:3000/address | jq -r .address`
+  - get address: `curl -s http://localhost:3000/address | jq `-r .address``
   - fund LND wallet: `./bitcoin-cli send 0.2`
   - mine block `./bitcoin-cli mine 1`
   - check balance: `curl -s http://localhost:3000/balance | jq`
@@ -182,10 +180,18 @@ docker compose logs -f bitcoind
 - paste lnurl into app and complete the flow
 - mine blocks: `./bitcoin-cli mine 6`
 
+#### LNURL-Withdraw
+- setup a channel (see above)
+- generate LNURL: `curl -s http://localhost:3000/generate/withdraw | jq -r .lnurl | pbcopy`
+- set an amount of at least ₿5000 & complete the flow
+- generate LNURL with limits: `curl -s "http://localhost:3000/generate/withdraw?minWithdrawable=100000&maxWithdrawable=200000" | jq -r .lnurl | pbcopy`
+  - `minWithdrawable` (optional): min msats (default: 1000 = 1 sat)
+  - `maxWithdrawable` (optional): max msats (default: 100000000 = 100k sats)
+
 #### LNURL-Auth
 
 - checkout [bitkit-docker](https://github.com/ovitrif/bitkit-docker) repo
-- set DOMAIN in `docker compose.yml` to `http://__YOUR_NETWORK_IP__:3000`
+- set DOMAIN in `docker-compose.yml` to `http://__YOUR_NETWORK_IP__:3000`
 - run `docker compose down`
 - run `docker compose up --build -d`
 - generate LNURL auth: `http://localhost:3000/generate/auth`
@@ -232,7 +238,7 @@ docker compose logs -f bitcoind
 
 ### Environment Variables
 
-Key environment variables in `docker compose.yml`:
+Key environment variables in `docker-compose.yml`:
 
 - `BITCOIN_RPC_HOST`: Bitcoin RPC host (default: `bitcoind`)
 - `BITCOIN_RPC_PORT`: Bitcoin RPC port (default: `43782`)
@@ -259,7 +265,7 @@ openssl rsa -in private.pem -pubout -out public.pem
 # Copy keys for services
 mv private.pem public.pem lnurl-server/keys/
 
-# Update VSS_JWT_PUBLIC_KEY env variable in docker compose.yml
+# Update VSS_JWT_PUBLIC_KEY env variable in docker-compose.yml
 ```
 
 **Database Setup:**
