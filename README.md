@@ -1,6 +1,6 @@
-# Bitkit Docker - Bitcoin & Lightning Development Environment
+# Bitkit Docker - Bitcoin & Lightning Dev Environment
 
-A complete Docker-based development environment for Bitcoin and Lightning Network development, featuring a LNURL server for Lightning payments.
+A complete Docker-based development environment for Bitcoin and Lightning Network development, featuring a LNURL server for Lightning payments and testing guides using the Bitkit app.
 
 ## Services
 
@@ -189,7 +189,6 @@ docker compose logs -f bitcoind
 
 #### LNURL-Auth
 
-- checkout [bitkit-docker](https://github.com/ovitrif/bitkit-docker) repo
 - set DOMAIN in `docker-compose.yml` to `http://__YOUR_NETWORK_IP__:3000`
 - run `docker compose down`
 - run `docker compose up --build -d`
@@ -200,8 +199,7 @@ docker compose logs -f bitcoind
 
 - `adb reverse tcp:3000 tcp:3000`
 - `adb reverse tcp:5050 tcp:5050`
-- checkout latest [bitkit-docker](https://github.com/ovitrif/bitkit-docker)
-  - cd to its root dir
+  - cd to root dir
   - `git submodule update --init --recursive`
   - `docker compose up --build -d`
 - in `Env.kt` use commented REGTEST urls for `lnurlAuthSeverUrl` and `vssServerUrl`
