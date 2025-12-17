@@ -139,14 +139,13 @@ docker compose logs -f bitcoind
 - in `Env.{kt,swift}`, use for REGTEST electrum server: `"tcp://localhost:60001"`
 - in app, wipe current wallet data and create fresh one
 - run `docker compose up --build -d`
-- mine blocks: `./bitcoin-cli mine 101`
 - fund onchain wallet: `./bitcoin-cli fund`
-- send funds to the app's wallet address: `./bitcoin-cli send 0.25`
+- send funds to n-app wallet address: `./bitcoin-cli send 0.25`
 - mine block: `./bitcoin-cli mine 1`
 - get local LND nodeID and open channel
   - `http://localhost:3000/health`
-  - `curl -s http://localhost:3000/health | jq -r .lnd.uris`
-  - `android` copy, replace `127.0.0.1` with `__YOUR_NETWORK_IP__` and paste into app, then complete the flow
+  - `curl -s http://localhost:3000/health | jq -r '.lnd.uris[0]' | pbcopy`
+  - app: send > paste, then complete the flow
   - `./bitcoin-cli mine 3`
 - generate LNURL pay: `http://localhost:3000/generate/pay`
 - paste lnurl into app
@@ -170,9 +169,9 @@ docker compose logs -f bitcoind
   - `docker compose up --build -d`
 - `adb reverse tcp:60001 tcp:60001`
 - `adb reverse tcp:9735 tcp:9735`
-- mine 101 blocks: `./bitcoin-cli fund`
+- fund onchain wallet: `./bitcoin-cli fund`
 - fund LND wallet:
-  - get address: `curl -s http://localhost:3000/address | jq `-r .address``
+  - get address: `curl -s http://localhost:3000/address | jq -r .address | pbcopy`
   - fund LND wallet: `./bitcoin-cli send 0.2`
   - mine block `./bitcoin-cli mine 1`
   - check balance: `curl -s http://localhost:3000/balance | jq`
@@ -219,9 +218,8 @@ docker compose logs -f bitcoind
   - `rm -rf ./lnd ./lnurl-server/data`
   - `docker compose up --build -d`
 - in `Env.kt`, change `ElectrumServers.REGTEST` to `"tcp://127.0.0.1:60001"`
-- `adb reverse tcp:60001 tcp:60001`
-- `adb reverse tcp:9735 tcp:9735`
-- mine 101 blocks: `./bitcoin-cli fund`
+- `android`: `adb reverse tcp:60001 tcp:60001` & `adb reverse tcp:9735 tcp:9735`
+- fund onchain wallet: `./bitcoin-cli fund`
 - fund LND wallet:
   - get address: `curl -s http://localhost:3000/address | jq -r .address`
   - fund LND wallet: `./bitcoin-cli send 0.2`
