@@ -150,7 +150,7 @@ docker compose logs -f bitcoind
   - `./bitcoin-cli mine 3`
 - generate LNURL pay: `http://localhost:3000/generate/pay`
 - paste lnurl into app
-- generate fixed amount LNURL pay (QuickPay): `curl -s 'http://localhost:3000/generate/pay?minSendable=10000&maxSendable=10000' | jq -r .lnurl`
+- generate fixed amount LNURL pay (QuickPay): `curl -s 'http://localhost:3000/generate/pay?minSendable=10000&maxSendable=10000' | jq -r .lnurl | pbcopy`
 
 #### Lightning Address
 
