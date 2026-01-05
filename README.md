@@ -137,6 +137,7 @@ docker compose logs -f bitcoind
 #### Bech32 LNURL Pay
 
 - in `Env.{kt,swift}`, use for REGTEST electrum server: `"tcp://localhost:60001"`
+- `adb reverse tcp:60001 tcp:60001 && adb reverse tcp:9735 tcp:9735`
 - in app, wipe current wallet data and create fresh one
 - run `docker compose up --build -d`
 - fund onchain wallet: `./bitcoin-cli fund`
@@ -149,7 +150,7 @@ docker compose logs -f bitcoind
   - `./bitcoin-cli mine 3`
 - generate LNURL pay: `http://localhost:3000/generate/pay`
 - paste lnurl into app
-- generate fixed amount LNURL pay (QuickPay): `http://localhost:3000/generate/pay?minSendable=10000&maxSendable=10000`
+- generate fixed amount LNURL pay (QuickPay): `curl -s 'http://localhost:3000/generate/pay?minSendable=10000&maxSendable=10000' | jq -r .lnurl`
 
 #### Lightning Address
 
@@ -167,8 +168,7 @@ docker compose logs -f bitcoind
   - `docker compose down -v`
   - `rm -rf ./lnd ./lnurl-server/data`
   - `docker compose up --build -d`
-- `adb reverse tcp:60001 tcp:60001`
-- `adb reverse tcp:9735 tcp:9735`
+- `adb reverse tcp:60001 tcp:60001 && adb reverse tcp:9735 tcp:9735`
 - fund onchain wallet: `./bitcoin-cli fund`
 - fund LND wallet:
   - get address: `curl -s http://localhost:3000/address | jq -r .address | pbcopy`
@@ -197,8 +197,7 @@ docker compose logs -f bitcoind
 
 #### LDK-NODE with JWT auth to VSS
 
-- `adb reverse tcp:3000 tcp:3000`
-- `adb reverse tcp:5050 tcp:5050`
+- `adb reverse tcp:3000 tcp:3000 && adb reverse tcp:5050 tcp:5050`
   - cd to root dir
   - `git submodule update --init --recursive`
   - `docker compose up --build -d`
@@ -216,7 +215,7 @@ docker compose logs -f bitcoind
   - `rm -rf ./lnd ./lnurl-server/data`
   - `docker compose up --build -d`
 - in `Env.kt`, change `ElectrumServers.REGTEST` to `"tcp://127.0.0.1:60001"`
-- `android`: `adb reverse tcp:60001 tcp:60001` & `adb reverse tcp:9735 tcp:9735`
+- `adb reverse tcp:60001 tcp:60001 && adb reverse tcp:9735 tcp:9735`
 - fund onchain wallet: `./bitcoin-cli fund`
 - fund LND wallet:
   - get address: `curl -s http://localhost:3000/address | jq -r .address`
