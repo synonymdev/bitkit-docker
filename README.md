@@ -141,7 +141,7 @@ docker compose logs -f bitcoind
 - in app, wipe current wallet data and create fresh one
 - run `docker compose up --build -d`
 - fund onchain wallet: `./bitcoin-cli fund`
-- send funds to n-app wallet address: `./bitcoin-cli send 0.25 --mine`
+- send funds to in-app wallet address: `./bitcoin-cli send 0.25 --mine`
 - get local LND nodeID and open channel
   - `http://localhost:3000/health`
   - `curl -s http://localhost:3000/health | jq -r '.lnd.uris[0]' | pbcopy`
