@@ -141,8 +141,7 @@ docker compose logs -f bitcoind
 - in app, wipe current wallet data and create fresh one
 - run `docker compose up --build -d`
 - fund onchain wallet: `./bitcoin-cli fund`
-- send funds to n-app wallet address: `./bitcoin-cli send 0.25`
-- mine block: `./bitcoin-cli mine 1`
+- send funds to n-app wallet address: `./bitcoin-cli send 0.25 --mine`
 - get local LND nodeID and open channel
   - `http://localhost:3000/health`
   - `curl -s http://localhost:3000/health | jq -r '.lnd.uris[0]' | pbcopy`
@@ -171,10 +170,9 @@ docker compose logs -f bitcoind
 - `adb reverse tcp:60001 tcp:60001 && adb reverse tcp:9735 tcp:9735`
 - fund onchain wallet: `./bitcoin-cli fund`
 - fund LND wallet:
-  - get address: `curl -s http://localhost:3000/address | jq -r .address | pbcopy`
-  - fund LND wallet: `./bitcoin-cli send 0.2`
-  - mine block `./bitcoin-cli mine 1`
-  - check balance: `curl -s http://localhost:3000/balance | jq`
+  - get address: `curl -s http://localhost:3000/health | jq -r '.lnd.address' | pbcopy`
+  - fund LND wallet: `./bitcoin-cli send 0.2 "$(pbpaste)" --mine`
+  - check balance: `curl -s http://localhost:3000/health | jq '.lnd.balance'`
 - generate LNURL channel: `http://localhost:3000/generate/channel`
 - paste lnurl into app and complete the flow
 - mine blocks: `./bitcoin-cli mine 6`
@@ -218,12 +216,10 @@ docker compose logs -f bitcoind
 - `adb reverse tcp:60001 tcp:60001 && adb reverse tcp:9735 tcp:9735`
 - fund onchain wallet: `./bitcoin-cli fund`
 - fund LND wallet:
-  - get address: `curl -s http://localhost:3000/address | jq -r .address`
-  - fund LND wallet: `./bitcoin-cli send 0.2`
-  - mine block `./bitcoin-cli mine 1`
+  - get address: `curl -s http://localhost:3000/health | jq -r '.lnd.address' | pbcopy`
+  - fund LND wallet: `./bitcoin-cli send 0.2 "$(pbpaste)" --mine`
   - check balance: `curl -s http://localhost:3000/health | jq '.lnd.balance'`
-- fund app wallet: `./bitcoin-cli send 0.002`
-- mine block `./bitcoin-cli mine 1`
+- fund app wallet: `./bitcoin-cli send 0.002 --mine`
 - `curl -s http://localhost:3000/health | jq -r '.lnd.uris[0]'` and copy to clipboard
 - send > paste invoice > complete flow for 100_000 sats > return to home screen
 - mine blocks: `./bitcoin-cli mine 6`
@@ -323,7 +319,7 @@ docker compose up --build -d
 3. Check LND wallet balance:
 
 ```sh
-curl -s http://localhost:3000/balance | jq
+curl -s http://localhost:3000/health | jq '.lnd.balance'
 ```
 
 ## Security Notes

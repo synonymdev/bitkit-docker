@@ -21,8 +21,8 @@ Flags:
     -h, --help                         Show this help message
 Commands:
     fund <amount>                      Fund the wallet
-    mine <amount> [--auto]             Generate a number of blocks
-    send [amount] [address]            Send to address or BIP21 URI (prompts for missing parameters)
+    mine [count] [--auto]              Generate blocks (default: 1)
+    send [amount] [address] [-m N]     Send to address and optionally mine N blocks (default: 1)
     getInvoice <amount>                Get a new BIP21 URI with a bech32 address
 EOF
 }
@@ -43,14 +43,7 @@ fi
 if [[ "$command" = "mine" ]]; then
   shift
 
-  if [ -z ${1+x} ]; then
-    echo "Specify the number of blocks to generate."
-    echo "Usage: \`$CLI_NAME $command <amount>\`"
-    exit 1
-  fi
-
   POSITIONAL_ARGS=()
-
   auto=false
 
   while [[ $# -gt 0 ]]; do
@@ -72,7 +65,9 @@ if [[ "$command" = "mine" ]]; then
 
   set -- "${POSITIONAL_ARGS[@]}"
 
-  # default to 5 seconds
+  # Default to 1 block if not specified
+  count=${1:-1}
+  # Default to 5 seconds interval for auto mode
   interval=${2:-5}
 
   if $auto; then
@@ -83,7 +78,7 @@ if [[ "$command" = "mine" ]]; then
       sleep $interval
     done
   else
-    "${BASE_COMMAND[@]}" -generate "$@"
+    "${BASE_COMMAND[@]}" -generate "$count"
   fi
 
   exit
@@ -92,6 +87,30 @@ fi
 # Send to a transaction
 if [[ "$command" = "send" ]]; then
   shift
+
+  mine_blocks=0
+  POSITIONAL_ARGS=()
+
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      -m|--mine)
+        # Check if next arg is a number
+        if [[ "${2:-}" =~ ^[0-9]+$ ]]; then
+          mine_blocks="$2"
+          shift 2
+        else
+          mine_blocks=1
+          shift
+        fi
+        ;;
+      *)
+        POSITIONAL_ARGS+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  set -- "${POSITIONAL_ARGS[@]}"
 
   if [ -z ${1+x} ]; then
     read -p "Enter a BIP21 URI or address: " uri
@@ -107,18 +126,21 @@ if [[ "$command" = "send" ]]; then
     fi
   fi
 
-  protocol=$(echo "${uri%%:*}")
+  protocol="${uri%%:*}"
 
   if [[ "$protocol" == "bitcoin" ]]; then
-    # BIP21 URI
-    # Remove the protocol
-    url_no_protocol=$(echo "${uri/$protocol/}" | cut -d":" -f2-)
+    # BIP21 URI: bitcoin:address?amount=X&message=Y&...
+    url_no_protocol="${uri#bitcoin:}"
 
-    address=$(echo $url_no_protocol | grep "?" | cut -d"/" -f1 | rev | cut -d"?" -f2- | rev || echo $url_no_protocol)
-    uri_amount=$(echo $url_no_protocol | cut -d'?' -f 2 | cut -d'=' -f 2 | cut -d'&' -f 1)
+    # Extract address (everything before ?)
+    address="${url_no_protocol%%\?*}"
 
-    if echo "$uri_amount" | grep -qE '^[0-9]*\.?[0-9]+$'; then
-      amount=$uri_amount
+    # Extract amount if present (look for amount= parameter specifically)
+    if [[ "$url_no_protocol" == *"?"* ]]; then
+      query_string="${url_no_protocol#*\?}"
+      if [[ "$query_string" =~ (^|&)amount=([0-9]*\.?[0-9]+) ]]; then
+        amount="${BASH_REMATCH[2]}"
+      fi
     fi
   else
     address=$uri
@@ -128,6 +150,12 @@ if [[ "$command" = "send" ]]; then
 
   echo "Sent $amount BTC to $address"
   echo "Transaction ID: $tx_id"
+
+  # Mine blocks if requested
+  if [[ $mine_blocks -gt 0 ]]; then
+    "${BASE_COMMAND[@]}" -generate "$mine_blocks"
+    echo "Mined $mine_blocks block(s)"
+  fi
 
   exit
 fi
