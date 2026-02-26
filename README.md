@@ -107,16 +107,40 @@ curl -v http://localhost:5050/vss/getObject
 
 ## Development
 
-### Adding Blocks (for testing)
+### bitcoin-cli helper
+
+The `bitcoin-cli` script provides shortcuts for common operations. Run `./bitcoin-cli --help` for full usage.
+
+**Bitcoin Core:**
+- `fund` - Generate 101 blocks to fund the wallet
+- `mine [count]` - Mine blocks (use `--auto` for continuous mining)
+- `send [amount] [address] [-m N]` - Send BTC to address, optionally mine N blocks after
+- `getInvoice [amount]` - Generate BIP21 URI with new address, copy to clipboard
+
+**LND:**
+- `getinfo` - Show LND node info (connectivity check)
+- `holdinvoice [amount] [-m memo]` - Create a hold invoice (any-amount by default)
+- `settleinvoice <preimage>` - Settle a hold invoice with its preimage
+- `cancelinvoice <payment_hash>` - Cancel a pending hold invoice
 
 ```bash
+# Fund wallet and mine blocks
+./bitcoin-cli fund
 ./bitcoin-cli mine 1
+
+# Create and settle a hold invoice
+./bitcoin-cli holdinvoice -m "test"           # any-amount invoice
+./bitcoin-cli holdinvoice 500 -m "test"       # 500 sats invoice
+./bitcoin-cli settleinvoice <preimage>        # after payment received
+./bitcoin-cli cancelinvoice <payment_hash>    # to cancel before payment
 ```
 
-### LND CLI
+### LND CLI (raw)
+
+For full lncli access:
 
 ```bash
-docker compose exec lnd lncli --network=regtest --tlscertpath=/home/lnd/.lnd/tls.cert --macaroonpath=/home/lnd/.lnd/data/chain/bitcoin/regtest/admin.macaroon getinfo
+docker compose exec lnd lncli --lnddir /home/lnd/.lnd --network regtest <command>
 ```
 
 ### View Logs
