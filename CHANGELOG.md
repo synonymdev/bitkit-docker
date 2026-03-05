@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Simplify LND funding step in README to a single command instead of clipboard-based two-step flow
+
 ### Added
 - BIP21 URI decoding support in the `/decode` page
   - Parses on-chain Bitcoin addresses with parameters (amount, label, message)

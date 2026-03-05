@@ -165,11 +165,10 @@ docker compose logs -f bitcoind
 - in app, wipe current wallet data and create fresh one
 - run `docker compose up --build -d`
 - fund onchain wallet: `./bitcoin-cli fund`
-- send funds to in-app wallet address: `./bitcoin-cli send 0.25 --mine`
-- get local LND nodeID and open channel
-  - `http://localhost:3000/health`
+- send funds to in-app wallet address: `./bitcoin-cli send 0.25 -m`
+- get local LND URI and open channel:
   - `curl -s http://localhost:3000/health | jq -r '.lnd.uris[0]' | pbcopy`
-  - app: send > paste, then complete the flow
+  - in app: send > paste > complete the flow
   - `./bitcoin-cli mine 3`
 - generate LNURL pay: `http://localhost:3000/generate/pay`
 - paste lnurl into app
@@ -194,8 +193,7 @@ docker compose logs -f bitcoind
 - `adb reverse tcp:60001 tcp:60001 && adb reverse tcp:9735 tcp:9735`
 - fund onchain wallet: `./bitcoin-cli fund`
 - fund LND wallet:
-  - get address: `curl -s http://localhost:3000/health | jq -r '.lnd.address' | pbcopy`
-  - fund LND wallet: `./bitcoin-cli send 0.2 "$(pbpaste)" --mine`
+  - `./bitcoin-cli send 0.2 "$(curl -s http://localhost:3000/health | jq -r '.lnd.address')" -m`
   - check balance: `curl -s http://localhost:3000/health | jq '.lnd.balance'`
 - generate LNURL channel: `http://localhost:3000/generate/channel`
 - paste lnurl into app and complete the flow
@@ -240,12 +238,11 @@ docker compose logs -f bitcoind
 - `adb reverse tcp:60001 tcp:60001 && adb reverse tcp:9735 tcp:9735`
 - fund onchain wallet: `./bitcoin-cli fund`
 - fund LND wallet:
-  - get address: `curl -s http://localhost:3000/health | jq -r '.lnd.address' | pbcopy`
-  - fund LND wallet: `./bitcoin-cli send 0.2 "$(pbpaste)" --mine`
+  - `./bitcoin-cli send 0.2 "$(curl -s http://localhost:3000/health | jq -r '.lnd.address')" -m`
   - check balance: `curl -s http://localhost:3000/health | jq '.lnd.balance'`
-- fund app wallet: `./bitcoin-cli send 0.002 --mine`
-- `curl -s http://localhost:3000/health | jq -r '.lnd.uris[0]'` and copy to clipboard
-- send > paste invoice > complete flow for 100_000 sats > return to home screen
+- fund app wallet: `./bitcoin-cli send 0.002 -m`
+- `curl -s http://localhost:3000/health | jq -r '.lnd.uris[0]' | pbcopy`
+- in app: send > paste > complete flow for 100_000 sats > return to home screen
 - mine blocks: `./bitcoin-cli mine 6`
 - await channel ready notice
 
