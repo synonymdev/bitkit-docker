@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Show ready-to-copy settle and cancel commands in `holdinvoice` output
 - Simplify LND funding step in README to a single command instead of clipboard-based two-step flow
 
 ### Added

@@ -244,6 +244,9 @@ if [[ "$command" = "holdinvoice" ]]; then
     echo "Hash: $hash"
     echo "Preimage: $preimage"
     echo ""
+    echo "./$CLI_NAME settleinvoice $preimage"
+    echo "./$CLI_NAME cancelinvoice $hash"
+    echo ""
 
     if command -v pbcopy &>/dev/null; then
       echo "$payment_request" | pbcopy
