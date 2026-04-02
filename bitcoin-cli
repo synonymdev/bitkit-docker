@@ -28,6 +28,7 @@ Commands:
     getInvoice <amount>                Get a new BIP21 URI with a bech32 address
   LND:
     getinfo                            Show LND node info (for connectivity debugging)
+    bolt11 [amount] [--msat] [-m memo]   Create a Lightning invoice
     holdinvoice [amount] [-m memo]     Create a hold invoice
     settleinvoice <preimage>           Reveal a preimage and use it to settle the corresponding invoice
     cancelinvoice <payment_hash>       Cancels a currently open invoice
@@ -193,6 +194,72 @@ fi
 # Show LND node info (LND)
 if [[ "$command" = "getinfo" ]]; then
   "${LNCLI_CMD[@]}" getinfo
+  exit
+fi
+
+# Create a Lightning invoice (LND)
+if [[ "$command" = "bolt11" ]]; then
+  shift
+
+  amount=""
+  memo=""
+  use_msat=false
+
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --msat)
+        use_msat=true
+        shift
+        ;;
+      -m|--memo)
+        memo="${2:-}"
+        shift 2
+        ;;
+      -*)
+        echo "Unknown option $1"
+        exit 1
+        ;;
+      *)
+        if [[ "$1" =~ ^[0-9]+$ ]]; then
+          amount="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  args=()
+  if [[ -n "$amount" ]]; then
+    if $use_msat; then
+      args+=(--amt_msat "$amount")
+    else
+      args+=(--amt "$amount")
+    fi
+  fi
+  if [[ -n "$memo" ]]; then
+    args+=(--memo "$memo")
+  fi
+
+  result=$("${LNCLI_CMD[@]}" addinvoice "${args[@]}" 2>&1) || true
+
+  payment_request=$(echo "$result" | jq -r '.payment_request // empty' 2>/dev/null) || payment_request=""
+  if [ -z "$payment_request" ]; then
+    payment_request=$(echo "$result" | sed -n 's/.*"payment_request"[^:]*:[^"]*"\([^"]*\)".*/\1/p') || payment_request=""
+  fi
+
+  if [ -n "$payment_request" ]; then
+    echo "$payment_request"
+    echo ""
+
+    if command -v pbcopy &>/dev/null; then
+      echo "$payment_request" | pbcopy
+      echo "Copied to clipboard."
+    fi
+  else
+    echo "${result:-LND command produced no output}"
+    exit 1
+  fi
+
   exit
 fi
 

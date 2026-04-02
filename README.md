@@ -119,6 +119,7 @@ The `bitcoin-cli` script provides shortcuts for common operations. Run `./bitcoi
 
 **LND:**
 - `getinfo` - Show LND node info (connectivity check)
+- `bolt11 [amount] [--msat] [-m memo]` - Create a Lightning invoice (amount in sats, or msats with `--msat`)
 - `holdinvoice [amount] [-m memo]` - Create a hold invoice (any-amount by default)
 - `settleinvoice <preimage>` - Settle a hold invoice with its preimage
 - `cancelinvoice <payment_hash>` - Cancel a pending hold invoice
@@ -127,6 +128,11 @@ The `bitcoin-cli` script provides shortcuts for common operations. Run `./bitcoi
 # Fund wallet and mine blocks
 ./bitcoin-cli fund
 ./bitcoin-cli mine 1
+
+# Create a Lightning invoice
+./bitcoin-cli bolt11 500                      # 500 sats invoice
+./bitcoin-cli bolt11 500500 --msat            # 500500 msats invoice
+./bitcoin-cli bolt11 500 -m "test"            # with memo
 
 # Create and settle a hold invoice
 ./bitcoin-cli holdinvoice -m "test"           # any-amount invoice
