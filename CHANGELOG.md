@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Simplify LND funding step in README to a single command instead of clipboard-based two-step flow
 
 ### Added
+- `bolt11` command in `bitcoin-cli` for creating regular Lightning invoices (supports `--msat` and `-m` memo)
 - LND hold invoice commands in `bitcoin-cli`: `holdinvoice`, `settleinvoice`, `cancelinvoice`
 - LND `getinfo` command in `bitcoin-cli` for connectivity debugging
 - `.vscode/` to `.gitignore`
