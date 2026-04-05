@@ -681,7 +681,13 @@ const renderGeneratorPage = ({}) => {
                         {
                             method: 'GET',
                             path: '/generate/bolt11?amount=2000',
-                            description: 'Generate Bolt11 with custom amount',
+                            description: 'Generate Bolt11 with amount in sats',
+                            clickable: true
+                        },
+                        {
+                            method: 'GET',
+                            path: '/generate/bolt11?amount_msat=222222',
+                            description: 'Generate Bolt11 with amount in msats',
                             clickable: true
                         }
                     ]

@@ -63,6 +63,7 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
   - `/generate/pay` - Generate LNURL-pay
   - `/generate/channel` - Generate LNURL-channel
   - `/generate/auth` - Generate LNURL-auth
+  - `/generate/bolt11` - Generate Bolt11 invoice (`?amount=` sats, `?amount_msat=` msats)
   - `/.well-known/lnurlp/:username` - Lightning Address
 
 ### VSS Server
