@@ -185,17 +185,27 @@ const generateLnurlAuth = async (query) => {
 };
 
 const generateBolt11 = async (query) => {
-    const { amount } = query;
+    const { amount, amount_msat } = query;
 
-    // Default to 0 (zero-amount invoice) if not specified
-    const amountSats = amount ? parseInt(amount) : 0;
+    let invoice;
+    let amountDisplay;
 
-    if (isNaN(amountSats) || amountSats < 0) {
-        throw new ValidationError('Invalid amount. Must be zero or a positive integer.');
+    if (amount_msat) {
+        const msat = parseInt(amount_msat);
+        if (isNaN(msat) || msat < 0) {
+            throw new ValidationError('Invalid amount_msat. Must be zero or a positive integer.');
+        }
+        invoice = await lndService.createInvoiceMsat(msat, '', 3600);
+        amountDisplay = { msat };
+    } else {
+        const amountSats = amount ? parseInt(amount) : 0;
+        if (isNaN(amountSats) || amountSats < 0) {
+            throw new ValidationError('Invalid amount. Must be zero or a positive integer.');
+        }
+        invoice = await lndService.createInvoice(amountSats, '', 3600);
+        amountDisplay = { sats: amountSats };
     }
 
-    // Create invoice with LND
-    const invoice = await lndService.createInvoice(amountSats, '', 3600);
     const paymentRequest = invoice.payment_request;
 
     const qrCode = await QRCode.toDataURL(paymentRequest, {
@@ -207,13 +217,13 @@ const generateBolt11 = async (query) => {
         }
     });
 
-    Logger.info('Bolt11 invoice generated', { amount: amountSats, paymentHash: invoice.r_hash });
+    Logger.info('Bolt11 invoice generated', { amount: amountDisplay, paymentHash: invoice.r_hash });
 
     return {
         bolt11: paymentRequest,
         qrCode,
         type: 'bolt11',
-        amount: amountSats,
+        amount: amountDisplay,
         paymentHash: invoice.r_hash
     };
 };

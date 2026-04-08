@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve LNURL-pay invoice millisatoshi precision by creating invoices with LND `value_msat` instead of truncating callback amounts to sats
 
 ### Added
+- Support `amount_msat` query param in `/generate/bolt11` endpoint for sub-sat precision invoices
 - `bolt11` command in `bitcoin-cli` for creating regular Lightning invoices (supports `--msat` and `-m` memo)
 - LND hold invoice commands in `bitcoin-cli`: `holdinvoice`, `settleinvoice`, `cancelinvoice`
 - LND `getinfo` command in `bitcoin-cli` for connectivity debugging
