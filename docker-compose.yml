@@ -173,6 +173,45 @@ services:
       timeout: 5s
       retries: 5
 
+  homegate-postgres:
+    container_name: homegate-postgres
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pubky_homegate
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - homegate_postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${HOMEGATE_POSTGRES_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pubky_homegate"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  homegate-admin-mock:
+    container_name: homegate-admin-mock
+    image: node:22-alpine
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", "server.js"]
+    environment:
+      HOMEGATE_ADMIN_MOCK_HOST: 0.0.0.0
+      HOMEGATE_ADMIN_MOCK_PORT: 6289
+      HOMEGATE_ADMIN_MOCK_PASSWORD: ${HOMEGATE_ADMIN_MOCK_PASSWORD:-admin}
+      HOMEGATE_ADMIN_MOCK_PUBKY: ${HOMEGATE_ADMIN_MOCK_PUBKY:-ufibwbmed6jeq9k4p583go95wofakh9fwpp4k734trq79pd9u1uy}
+    volumes:
+      - ./homegate-admin-mock:/app:ro
+    ports:
+      - "${HOMEGATE_ADMIN_MOCK_PORT:-6289}:6289"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:6289/info', { headers: { 'X-Admin-Password': process.env.HOMEGATE_ADMIN_MOCK_PASSWORD || 'admin' } }).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   lnurl-auth-server:
     container_name: lnurl-auth-server
     image: lnurl-auth-server:latest
@@ -239,6 +278,24 @@ services:
     ports:
       - "5050:5050"
 
+  homegate:
+    container_name: homegate
+    image: homegate:latest
+    build:
+      context: ./homegate
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      homegate-postgres:
+        condition: service_healthy
+      homegate-admin-mock:
+        condition: service_healthy
+    volumes:
+      - homegate_data:/root/.homegate
+      - ./homegate-config.toml:/root/.homegate/config.toml:ro
+    ports:
+      - "${HOMEGATE_PORT:-6288}:6288"
+
   trezor-user-env-mac:
     image: ghcr.io/trezor/trezor-user-env
     ports:
@@ -276,5 +333,7 @@ volumes:
   bitcoin_home:
   postgres_data:
   lnurl_auth_data:
+  homegate_postgres_data:
+  homegate_data:
 
 networks: {}

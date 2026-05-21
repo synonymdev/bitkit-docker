@@ -1,0 +1,13 @@
+# Homegate configuration for the default bitkit-docker stack.
+
+database_url = "postgres://postgres:postgres@homegate-postgres:5432/pubky_homegate"
+http_listen_socket = "0.0.0.0:6288"
+allow_cors = true
+
+[homeserver]
+admin_api_url = "http://homegate-admin-mock:6289"
+admin_password = "admin"
+
+[ip_verification]
+max_verifications_per_week = 2
+max_verifications_per_year = 4
