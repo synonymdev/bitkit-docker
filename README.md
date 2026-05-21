@@ -215,7 +215,7 @@ Use this section as the entry point when checking Bitkit app PRs or merged featu
 ./scripts/trezor-emulator start
 ```
 
-The macOS Trezor User Env service is included in the default `docker compose up -d` stack. The helper starts or reuses that service, then resets Bridge and the emulator into the deterministic review state. Linux users can start the host-network service with `docker compose --profile trezor-linux up -d trezor-user-env-linux`.
+The macOS Trezor User Env service is included in the default `docker compose up -d` stack. The helper uses this repo-managed Compose service, then resets Bridge and the emulator into the deterministic review state. Linux users can start the host-network service with `docker compose --profile trezor-linux up -d trezor-user-env-linux`.
 
 The helper starts the official Trezor User Env without its regtest stack, launches Bridge, wipes a deterministic T2T1 emulator, and sets it up with the `all all ...` seed and `Bitkit Test Trezor` label. It uses `scripts/trezor-controller.py` inside the container to talk to the User Env websocket controller.
 

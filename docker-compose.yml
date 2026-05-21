@@ -316,7 +316,6 @@ services:
       - ./.trezor-user-env/firmware/user_downloaded:/trezor-user-env/src/binaries/firmware/bin/user_downloaded
 
   trezor-user-env-linux:
-    container_name: trezor-user-env.unix
     image: ghcr.io/trezor/trezor-user-env
     profiles:
       - trezor-linux
