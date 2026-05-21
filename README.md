@@ -165,6 +165,62 @@ docker compose logs -f bitcoind
 
 ### Bitkit Testing
 
+#### Trezor Hardware PRs
+
+Use this section as the entry point when checking Bitkit app PRs or merged features that need the official Trezor emulator. Start by preparing the deterministic Trezor User Env:
+
+```bash
+./scripts/trezor-emulator start
+```
+
+The macOS Trezor User Env service is included in the default `docker compose up -d` stack. The helper starts or reuses that service, then resets Bridge and the emulator into the deterministic review state. Linux users can start the host-network service with `docker compose --profile trezor-linux up -d trezor-user-env-linux`.
+
+The helper starts the official Trezor User Env without its regtest stack, launches Bridge, wipes a deterministic T2T1 emulator, and sets it up with the `all all ...` seed and `Bitkit Test Trezor` label. It uses `scripts/trezor-controller.py` inside the container to talk to the User Env websocket controller.
+
+##### Bitkit Android
+
+For a physical phone, reverse the Bridge port and install the dev build with Bridge enabled:
+
+```bash
+./scripts/trezor-emulator adb
+TREZOR_BRIDGE=true TREZOR_BRIDGE_URL=http://127.0.0.1:21325 ./gradlew installDevDebug
+```
+
+For an Android emulator, install with the emulator host Bridge URL:
+
+```bash
+TREZOR_BRIDGE=true TREZOR_BRIDGE_URL=http://10.0.2.2:21325 ./gradlew installDevDebug
+```
+
+Open the dashboard at `Settings -> Advanced -> Dev Settings -> Trezor`, then check:
+
+- Scan shows the Bridge emulator device
+- Connect succeeds and device features are shown
+- Get address succeeds
+- Get public key succeeds
+- Sign and verify message succeed
+- Send or compose reaches the expected funded or no-funds state
+- Disconnect, reconnect, and forget-device cleanup behave correctly
+
+##### Bitkit iOS
+
+Run the relevant Trezor branch from Xcode. The User Env dashboard and Bridge are available on the host at:
+
+- User Env dashboard: `http://localhost:9002`
+- Trezor Bridge: `http://localhost:21325`
+
+Open the dashboard at `Settings -> Advanced -> Trezor Hardware Wallet`, then check:
+
+- Scan shows the Bridge emulator device
+- Connect succeeds and device features are shown
+- Get address succeeds
+- Get public key succeeds
+- Sign and verify message succeed
+- Send or compose reaches the expected funded or no-funds state
+- Disconnect, reconnect, and forget-device cleanup behave correctly
+
+See [docs/trezor-emulator.md](docs/trezor-emulator.md) for helper internals, environment overrides, and troubleshooting commands.
+
 #### Bech32 LNURL Pay
 
 - in `Env.{kt,swift}`, use for REGTEST electrum server: `"tcp://localhost:60001"`

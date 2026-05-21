@@ -6,3 +6,5 @@ target/
 .DS_Store
 *.local.*
 .vscode/
+.trezor-user-env/
+__pycache__/
