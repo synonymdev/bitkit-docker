@@ -17,7 +17,7 @@ Commands:
   start       Start Trezor User Env, Bridge, and a deterministic T2T1 emulator
   status      Show User Env bridge/emulator status and Bridge enumerate output
   adb         Reverse the Bridge port for a physical Android device
-  stop        Stop the emulator and Bridge; stop repo-managed User Env when owned here
+  stop        Stop the emulator and Bridge; stop the repo-managed User Env service
   logs        Tail the User Env container logs
   send-json   Send one raw JSON command to the User Env controller
   help        Show this help
@@ -36,12 +36,10 @@ detect_service() {
     Darwin)
       TREZOR_PROFILE="${TREZOR_PROFILE:-}"
       TREZOR_SERVICE="${TREZOR_SERVICE:-trezor-user-env-mac}"
-      TREZOR_UPSTREAM_CONTAINER="${TREZOR_UPSTREAM_CONTAINER:-trezor-user-env.mac}"
       ;;
     Linux)
       TREZOR_PROFILE="${TREZOR_PROFILE:-trezor-linux}"
       TREZOR_SERVICE="${TREZOR_SERVICE:-trezor-user-env-linux}"
-      TREZOR_UPSTREAM_CONTAINER="${TREZOR_UPSTREAM_CONTAINER:-trezor-user-env.unix}"
       ;;
     *)
       echo "Unsupported OS for the bundled Trezor User Env helper: $(uname -s)" >&2
@@ -65,15 +63,6 @@ compose_with_profile() {
 resolve_container() {
   local compose_id
 
-  if [[ -n "${TREZOR_CONTAINER:-}" ]] && docker inspect "$TREZOR_CONTAINER" >/dev/null 2>&1; then
-    return 0
-  fi
-
-  if [[ -n "${TREZOR_UPSTREAM_CONTAINER:-}" ]] && docker inspect "$TREZOR_UPSTREAM_CONTAINER" >/dev/null 2>&1; then
-    TREZOR_CONTAINER="$TREZOR_UPSTREAM_CONTAINER"
-    return 0
-  fi
-
   compose_id="$(compose_with_profile ps -q "$TREZOR_SERVICE" 2>/dev/null | head -n 1 || true)"
   if [[ -n "$compose_id" ]]; then
     TREZOR_CONTAINER="$compose_id"
@@ -83,31 +72,13 @@ resolve_container() {
   return 1
 }
 
-container_exists() {
-  resolve_container
-}
-
 container_running() {
   resolve_container || return 1
   [[ "$(docker inspect -f '{{.State.Running}}' "$TREZOR_CONTAINER" 2>/dev/null)" == "true" ]]
 }
 
-container_image() {
-  resolve_container || return 0
-  docker inspect -f '{{.Config.Image}}' "$TREZOR_CONTAINER" 2>/dev/null || true
-}
-
-container_project() {
-  resolve_container || return 0
-  docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$TREZOR_CONTAINER" 2>/dev/null || true
-}
-
 container_logs() {
-  if container_exists; then
-    docker logs "$@" "$TREZOR_CONTAINER"
-  else
-    compose_with_profile logs "$@" "$TREZOR_SERVICE"
-  fi
+  compose_with_profile logs "$@" "$TREZOR_SERVICE"
 }
 
 prepare_dirs() {
@@ -179,22 +150,15 @@ install_apple_silicon_sdl_packages() {
 start_env() {
   prepare_dirs
 
-  if container_exists; then
-    if [[ "$(container_image)" != "ghcr.io/trezor/trezor-user-env" ]]; then
-      echo "Container $TREZOR_CONTAINER already exists but is not the Trezor User Env image." >&2
-      exit 1
-    fi
+  compose_with_profile up -d "$TREZOR_SERVICE"
+  TREZOR_CONTAINER="$(compose_with_profile ps -q "$TREZOR_SERVICE" | head -n 1)"
 
-    if container_running; then
-      echo "Reusing running $TREZOR_CONTAINER container from compose project: $(container_project)"
-    else
-      echo "Starting existing $TREZOR_CONTAINER container."
-      docker start "$TREZOR_CONTAINER" >/dev/null
-    fi
-  else
-    compose_with_profile up -d "$TREZOR_SERVICE"
-    TREZOR_CONTAINER="$(compose_with_profile ps -q "$TREZOR_SERVICE" | head -n 1)"
+  if [[ -z "$TREZOR_CONTAINER" ]]; then
+    echo "Failed to start repo-managed Trezor User Env service: $TREZOR_SERVICE" >&2
+    exit 1
   fi
+
+  echo "Using repo-managed Trezor User Env service: $TREZOR_SERVICE"
 
   wait_for_controller
   install_apple_silicon_sdl_packages
