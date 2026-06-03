@@ -3,14 +3,19 @@ const { randomUUID } = require('crypto');
 
 const host = process.env.HOMEGATE_ADMIN_MOCK_HOST || '0.0.0.0';
 const port = Number(process.env.HOMEGATE_ADMIN_MOCK_PORT || 6289);
-const adminPassword = process.env.HOMEGATE_ADMIN_MOCK_PASSWORD || 'admin';
+const adminPassword = process.env.HOMEGATE_ADMIN_MOCK_PASSWORD ?? 'admin';
 const pubky =
   process.env.HOMEGATE_ADMIN_MOCK_PUBKY ||
   'ufibwbmed6jeq9k4p583go95wofakh9fwpp4k734trq79pd9u1uy';
 
+if (!adminPassword) {
+  console.error('HOMEGATE_ADMIN_MOCK_PASSWORD must not be empty');
+  process.exit(1);
+}
+
 function authorized(req) {
   const provided = req.headers['x-admin-password'];
-  return !adminPassword || provided === adminPassword;
+  return provided === adminPassword;
 }
 
 function send(res, status, body, headers = {}) {

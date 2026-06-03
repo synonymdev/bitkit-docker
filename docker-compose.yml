@@ -204,8 +204,8 @@ services:
       HOMEGATE_ADMIN_MOCK_PUBKY: ${HOMEGATE_ADMIN_MOCK_PUBKY:-ufibwbmed6jeq9k4p583go95wofakh9fwpp4k734trq79pd9u1uy}
     volumes:
       - ./homegate-admin-mock:/app:ro
-    ports:
-      - "${HOMEGATE_ADMIN_MOCK_PORT:-6289}:6289"
+    expose:
+      - "6289"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:6289/info', { headers: { 'X-Admin-Password': process.env.HOMEGATE_ADMIN_MOCK_PASSWORD || 'admin' } }).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s

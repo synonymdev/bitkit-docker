@@ -77,7 +77,7 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
 
 - **Port**: 6288
 - **Database**: Dedicated `homegate-postgres` service, exposed on host port 5433 by default
-- **Admin mock**: `homegate-admin-mock` on port 6289
+- **Admin mock**: `homegate-admin-mock`, available only inside the Compose network and password-protected by default
 - **Features**:
   - Pubky Homeserver signup-code gatekeeping
   - IP verification enabled by default for local testing
@@ -126,6 +126,8 @@ curl http://localhost:6288/
 ### Homegate
 
 Homegate starts with the default `docker compose up -d` stack. Its source is included as the `homegate` submodule, and the container reads [homegate-config.toml](homegate-config.toml), which points at a local `homegate-admin-mock` service so startup does not require real Pubky Homeserver credentials.
+
+The local stack sets high IP verification limits so repeated profile-creation test runs do not exhaust the quota from the same machine.
 
 Useful commands:
 
@@ -363,8 +365,7 @@ Key environment variables in `docker-compose.yml`:
 - `LND_REST_PORT`: LND REST API port (default: `8080`)
 - `HOMEGATE_PORT`: Host port for Homegate (default: `6288`)
 - `HOMEGATE_POSTGRES_PORT`: Host port for Homegate PostgreSQL (default: `5433`)
-- `HOMEGATE_ADMIN_MOCK_PORT`: Host port for the local Homegate admin API mock (default: `6289`)
-- `HOMEGATE_ADMIN_MOCK_PASSWORD`: Admin password expected by the local Homegate admin API mock (default: `admin`)
+- `HOMEGATE_ADMIN_MOCK_PASSWORD`: Admin password expected by the local Homegate admin API mock (default: `admin`; keep this in sync with [homegate-config.toml](homegate-config.toml))
 - `HOMEGATE_ADMIN_MOCK_PUBKY`: Homeserver public key returned by the local Homegate admin API mock
 
 ### Volumes

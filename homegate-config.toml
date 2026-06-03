@@ -9,5 +9,5 @@ admin_api_url = "http://homegate-admin-mock:6289"
 admin_password = "admin"
 
 [ip_verification]
-max_verifications_per_week = 2
-max_verifications_per_year = 4
+max_verifications_per_week = 1000
+max_verifications_per_year = 10000
