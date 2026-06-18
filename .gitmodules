@@ -2,3 +2,7 @@
 	path = vss-server
 	url = git@github.com:synonymdev/vss-server.git
 	branch = chore/rebase-stag-on-main
+[submodule "homegate"]
+	path = homegate
+	url = git@github.com:pubky/homegate.git
+	branch = master

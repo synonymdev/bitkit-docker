@@ -10,13 +10,11 @@ Bitkit app PRs that need Trezor hardware behavior can use the official Trezor Us
 
 On macOS, the Trezor User Env service is part of the default compose stack, so `docker compose up -d` starts it with the rest of the Bitkit services. The helper is still useful because it resets Bridge and the emulator into the deterministic review state.
 
-Linux needs host networking like upstream User Env, so its service stays behind the `trezor-linux` profile:
+Linux needs host networking for Trezor User Env, so its service stays behind the `trezor-linux` profile:
 
 ```bash
 docker compose --profile trezor-linux up -d trezor-user-env-linux
 ```
-
-If an upstream `trezor-user-env.mac` or `trezor-user-env.unix` container is already running, the helper reuses it instead of creating a duplicate container with the same fixed name.
 
 The default emulator configuration is:
 
@@ -88,7 +86,7 @@ Open the User Env dashboard at <http://localhost:9002>. Trezor Bridge listens at
 
 ## How It Works
 
-`scripts/trezor-emulator` is the entrypoint. It starts or reuses the User Env container, then runs `scripts/trezor-controller.py` inside that container with `/trezor-user-env/.venv/bin/python3`.
+`scripts/trezor-emulator` is the entrypoint. It starts this repo's Trezor User Env Compose service, then runs `scripts/trezor-controller.py` inside that container with `/trezor-user-env/.venv/bin/python3`.
 
 The Python script talks to the User Env websocket controller at `ws://127.0.0.1:9001` and sends the setup commands:
 

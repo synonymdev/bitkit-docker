@@ -10,6 +10,7 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
 - **LNURL Server**: Lightning payment server with LNURL support
 - **LDK Backup Server**: Lightning Development Kit backup service
 - **VSS Server**: Versioned Storage Server for app and ldk-node state backups
+- **Homegate**: Pubky Homeserver signup gatekeeper with local admin API mock
 
 ## Quick Start
 
@@ -27,6 +28,7 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
 
    ```bash
    curl http://localhost:3000/health
+   curl http://localhost:6288/
    ```
 
 ## Services Overview
@@ -71,6 +73,16 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
 - **Port**: 5050
 - **Features**: RS256 JWT authentication
 
+### Homegate
+
+- **Port**: 6288
+- **Database**: Dedicated `homegate-postgres` service, exposed on host port 5433 by default
+- **Admin mock**: `homegate-admin-mock`, available only inside the Compose network and password-protected by default
+- **Features**:
+  - Pubky Homeserver signup-code gatekeeping
+  - IP verification enabled by default for local testing
+  - SMS and Lightning verification disabled by default unless provider-backed config is added
+
 ### LNURL-Auth Server
 
 - **Port**: 5005
@@ -104,9 +116,40 @@ curl -s http://localhost:3000/.well-known/lnurlp/alice | jq
 
 # VSS Health Check
 curl -v http://localhost:5050/vss/getObject
+
+# Homegate service check
+curl http://localhost:6288/
 ```
 
 ## Development
+
+### Homegate
+
+Homegate starts with the default `docker compose up -d` stack. Its source is included as the `homegate` submodule, and the container reads [homegate-config.toml](homegate-config.toml), which points at a local `homegate-admin-mock` service so startup does not require real Pubky Homeserver credentials.
+
+The local stack sets high IP verification limits so repeated profile-creation test runs do not exhaust the quota from the same machine.
+
+Useful commands:
+
+```bash
+# Rebuild and start Homegate with its database and admin mock
+docker compose up --build -d homegate
+
+# Check the service root
+curl http://localhost:6288/
+
+# Exercise IP verification against the local admin mock
+curl -X POST http://localhost:6288/ip_verification
+
+# Follow logs
+docker compose logs -f homegate
+```
+
+To test against a real Homeserver admin API or provider-backed SMS/Lightning verification, update [homegate-config.toml](homegate-config.toml) before starting the service:
+
+- Point `[homeserver].admin_api_url` and `admin_password` at the real admin API
+- Add `[sms_verification]` with Prelude credentials for SMS verification
+- Add `[ln_verification]` with PhoenixD credentials for Lightning verification
 
 ### bitcoin-cli helper
 
@@ -159,6 +202,7 @@ docker compose logs -f
 # Specific service
 docker compose logs -f lnurl-server
 docker compose logs -f vss-server
+docker compose logs -f homegate
 docker compose logs -f lnd
 docker compose logs -f bitcoind
 ```
@@ -173,7 +217,7 @@ Use this section as the entry point when checking Bitkit app PRs or merged featu
 ./scripts/trezor-emulator start
 ```
 
-The macOS Trezor User Env service is included in the default `docker compose up -d` stack. The helper starts or reuses that service, then resets Bridge and the emulator into the deterministic review state. Linux users can start the host-network service with `docker compose --profile trezor-linux up -d trezor-user-env-linux`.
+The macOS Trezor User Env service is included in the default `docker compose up -d` stack. The helper uses this repo-managed Compose service, then resets Bridge and the emulator into the deterministic review state. Linux users can start the host-network service with `docker compose --profile trezor-linux up -d trezor-user-env-linux`.
 
 The helper starts the official Trezor User Env without its regtest stack, launches Bridge, wipes a deterministic T2T1 emulator, and sets it up with the `all all ...` seed and `Bitkit Test Trezor` label. It uses `scripts/trezor-controller.py` inside the container to talk to the User Env websocket controller.
 
@@ -319,6 +363,10 @@ Key environment variables in `docker-compose.yml`:
 - `BITCOIN_RPC_PORT`: Bitcoin RPC port (default: `43782`)
 - `LND_REST_HOST`: LND REST API host (default: `lnd`)
 - `LND_REST_PORT`: LND REST API port (default: `8080`)
+- `HOMEGATE_PORT`: Host port for Homegate (default: `6288`)
+- `HOMEGATE_POSTGRES_PORT`: Host port for Homegate PostgreSQL (default: `5433`)
+- `HOMEGATE_ADMIN_MOCK_PASSWORD`: Admin password expected by the local Homegate admin API mock (default: `admin`; keep this in sync with [homegate-config.toml](homegate-config.toml))
+- `HOMEGATE_ADMIN_MOCK_PUBKY`: Homeserver public key returned by the local Homegate admin API mock
 
 ### Volumes
 
@@ -327,6 +375,8 @@ Key environment variables in `docker-compose.yml`:
 - `./lnurl-server/keys:/app/keys:ro` - RSA keys for JWT signing
 - `bitcoin_home` - Bitcoin blockchain data
 - `postgres_data` - VSS PostgreSQL database
+- `homegate_postgres_data` - Homegate PostgreSQL database
+- `homegate_data` - Homegate local state, including the generated phone-number pepper
 
 ### VSS Server Setup
 
@@ -362,7 +412,7 @@ rm -rf ./data ./test-data
 # rm -rf lnurl-server/keys/ private.pem public.pem
 # Then Generate new RSA keys (see above)
 
-# Initialize vss-server submodule:
+# Initialize submodules:
 git submodule update --init --recursive
 
 # Start services
@@ -382,6 +432,12 @@ docker compose up --build -d
 1. Wait for LND to fully sync
 2. Check macaroon files exist
 3. Verify network connectivity between containers
+
+### Homegate exits immediately
+
+1. Check logs: `docker compose logs homegate homegate-admin-mock`
+2. Verify [homegate-config.toml](homegate-config.toml) is mounted and points `[homeserver].admin_api_url` at a reachable admin API
+3. Confirm the configured homeserver admin API responds to `/info`; Homegate stops during startup if that check fails
 
 ### Bitcoin RPC issues
 
