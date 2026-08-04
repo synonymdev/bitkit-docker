@@ -147,6 +147,32 @@ install_apple_silicon_sdl_packages() {
   '
 }
 
+clean_stale_x_locks() {
+  # Xvfb refuses to start when a previous run left /tmp/.X<n>-lock behind, which
+  # makes the emulator fail with "SDL_Init error" -> "Emulator process died".
+  # The container filesystem survives restarts, so clear locks with no live Xvfb.
+  docker exec "$TREZOR_CONTAINER" sh -c '
+    for lock in /tmp/.X*-lock; do
+      [ -e "$lock" ] || continue
+
+      display=${lock#/tmp/.X}
+      display=${display%-lock}
+      pid=$(tr -dc "0-9" < "$lock" 2>/dev/null)
+
+      if [ -n "$pid" ] && [ -r "/proc/$pid/comm" ] && [ "$(cat "/proc/$pid/comm")" = "Xvfb" ]; then
+        state=$(ps -o stat= -p "$pid" 2>/dev/null | tr -dc "A-Za-z")
+        case "$state" in
+          Z|"") ;;
+          *) continue ;;
+        esac
+      fi
+
+      echo "Removing stale X display lock for :$display (no live Xvfb)"
+      rm -f "$lock" "/tmp/.X11-unix/X$display"
+    done
+  '
+}
+
 start_env() {
   prepare_dirs
 
@@ -162,6 +188,7 @@ start_env() {
 
   wait_for_controller
   install_apple_silicon_sdl_packages
+  clean_stale_x_locks
 }
 
 bridge_enumerate() {
