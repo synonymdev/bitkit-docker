@@ -84,6 +84,32 @@ Use this checklist when reviewing any Bitkit app PR that needs the Trezor emulat
 
 Open the User Env dashboard at <http://localhost:9002>. Trezor Bridge listens at <http://localhost:21325>.
 
+## Troubleshooting
+
+### `RuntimeError('Emulator process died')`
+
+The emulator needs the Xvfb virtual display. When the container is stopped
+ungracefully, Xvfb can leave `/tmp/.X<n>-lock` and `/tmp/.X11-unix/X<n>` behind.
+The container filesystem survives restarts, so Xvfb then refuses to start with
+`Server is already active for display <n>`, the emulator fails with
+`SDL_Init error` / `No available video device`, and the controller reports
+`RuntimeError('Emulator process died')`.
+
+`./scripts/trezor-emulator start` now removes these locks automatically when no
+live Xvfb owns them. To clear them by hand:
+
+```bash
+docker compose exec trezor-user-env-mac sh -c 'rm -f /tmp/.X42-lock /tmp/.X11-unix/X42'
+```
+
+If a start attempt leaves the controller wedged (for example `emulator-setup`
+hanging after a failed start), restart the service before retrying:
+
+```bash
+docker compose restart trezor-user-env-mac
+./scripts/trezor-emulator start
+```
+
 ## How It Works
 
 `scripts/trezor-emulator` is the entrypoint. It starts this repo's Trezor User Env Compose service, then runs `scripts/trezor-controller.py` inside that container with `/trezor-user-env/.venv/bin/python3`.

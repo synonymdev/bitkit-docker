@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Simplify LND funding step in README to a single command instead of clipboard-based two-step flow
 
 ### Fixed
+- Clear stale X display locks in `scripts/trezor-emulator` before starting the emulator, fixing `RuntimeError('Emulator process died')` caused by Xvfb refusing to start over a leftover `/tmp/.X<n>-lock`
 - Validate LNURL-withdraw callback invoices by millisatoshis (`num_msat`) to preserve msat precision for min/max range checks
 - Preserve LNURL-pay invoice millisatoshi precision by creating invoices with LND `value_msat` instead of truncating callback amounts to sats
 
