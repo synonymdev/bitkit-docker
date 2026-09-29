@@ -55,11 +55,14 @@ these fixed ports:
 | 15411, 15412 | PKARR relay, HTTP relay |
 | 6881 (tcp and udp) | DHT bootstrap |
 | 3001 | Paykit Server (`MARKETPLACE_PAYKIT_PORT`) |
+| 3012, 3013 | `fixture-issuer` and `rc56-peer` of the opt-in `payment-requests` profile (see the README); nothing listens until they run |
 | 16288 | homeserver admin (`MARKETPLACE_HOMESERVER_ADMIN_PORT`; the in-container 6288 is Homegate's host port) |
 | 60001 | Electrum, from the base stack |
 
 `paykit-server` and `marketplace-driver` share the `pubky-testnet` network namespace, as the upstream
-Locks compose does, so their Pubky clients reach the testnet on localhost.
+Locks compose does, so their Pubky clients reach the testnet on localhost. The `payment-requests` profile's `fixture-issuer`
+and `rc56-peer` join it too. They sign up on the testnet homeserver and use its HTTP relay, and do not talk
+to Paykit Server, so its pin does not affect them.
 
 ## Roles
 
