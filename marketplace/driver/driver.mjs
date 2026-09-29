@@ -35,6 +35,8 @@ const HOMESERVER = 'pubky8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo';
 const SETUP_ORIGIN = 'http://localhost:8080';
 // The grant client id Paykit Server requires in its config and puts in the setup auth URL as cid.
 const PAYKIT_CLIENT_ID = 'app.paykit.server';
+// Pubky 0.10 sessions are grants, so a signin names its client.
+const HEADLESS_CLIENT_ID = 'marketplace.fixture';
 const SERVER_PATH = 'bitkit/server';
 const BUYER_PATH = 'bitkit/wallet';
 const ACCOUNT_INDEX = 0;
@@ -223,7 +225,7 @@ async function signUpIdentity(seed) {
   } catch (error) {
     const message = String(error?.message ?? error).toLowerCase();
     if (!/already|409|conflict/.test(message)) throw error;
-    await signer.signin();
+    await signer.signin(HEADLESS_CLIENT_ID);
   }
   return keypair.publicKey.toString();
 }
@@ -231,7 +233,7 @@ async function signUpIdentity(seed) {
 async function sellerSession() {
   const seed = Buffer.from(await readSecret('seller-identity.seed'), 'base64url');
   const signer = pubkyClient().signer(Keypair.fromSecret(seed));
-  return signer.signin();
+  return signer.signin(HEADLESS_CLIENT_ID);
 }
 
 // ----------------------------------------------------------- helper binaries
