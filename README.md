@@ -11,6 +11,7 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
 - **LDK Backup Server**: Lightning Development Kit backup service
 - **VSS Server**: Versioned Storage Server for app and ldk-node state backups
 - **Homegate**: Pubky Homeserver signup gatekeeper with local admin API mock
+- **Pubky marketplace fixture** (opt-in `marketplace` profile): Pubky testnet, Paykit Server and a purchase driver for the marketplace wallet journey
 
 ## Quick Start
 
@@ -264,6 +265,46 @@ Open the dashboard at `Settings -> Advanced -> Trezor Hardware Wallet`, then che
 - Disconnect, reconnect, and forget-device cleanup behave correctly
 
 See [docs/trezor-emulator.md](docs/trezor-emulator.md) for helper internals, environment overrides, and troubleshooting commands.
+
+#### Pubky Marketplace Journey
+
+Use this section for the Bitkit marketplace wallet journey (`journeys/pubky-marketplace` in [bitkit-ios](https://github.com/synonymdev/bitkit-ios/tree/master/journeys/pubky-marketplace) and [bitkit-android](https://github.com/synonymdev/bitkit-android/tree/master/journeys/pubky-marketplace)). The `marketplace` profile adds the integration fixture that the journey lists: a Pubky testnet, Paykit Server `867fc883` (the merge of [pubky/paykit-server#2](https://github.com/pubky/paykit-server/pull/2)) with `/setup` and `x-bitkit-claim=watch-only-account-v1`, and a purchase driver. It reuses this stack's regtest `bitcoind` and Electrum on `tcp://127.0.0.1:60001`. A plain `docker compose up -d` does not start it, and `./pubky-marketplace` starts only the chain and fixture services, so run it without the full stack (Homegate also wants port 6288). It needs Docker, `git`, `curl` and `jq` on the host, and outbound internet during the first build and during setup approval (see the setup relay note in [docs/pubky-marketplace.md](docs/pubky-marketplace.md)).
+
+```bash
+./pubky-marketplace up                    # fetch pinned sources, build, start, wait until Paykit Server is ready (first build takes a while)
+./pubky-marketplace seed                  # mine to maturity, seller wallet and identity, watch-only setup, headless buyer
+./pubky-marketplace verify                # whole journey with no wallet app; writes .marketplace/evidence/<run>/summary.json
+```
+
+`verify` creates one purchase, receives the Payment Request as a headless buyer, checks the unsigned and garbage-signed calls fail with 401, pays the derived address, confirms the transaction is the only mempool entry, mines exactly one block, and waits for the signed Paykit status `confirmed`. Run the same steps by hand:
+
+```bash
+./pubky-marketplace purchase --sats 15000   # prints bundle id, derived address, amount, delivery state
+./pubky-marketplace receive <bundle>        # headless buyer: Payment Request id, checks lowercase btc and the address
+./pubky-marketplace pay <bundle>            # headless buyer pays from the regtest wallet
+./pubky-marketplace wait <bundle> detected  # signed Paykit status: detected
+./pubky-marketplace mine --bundle <bundle>  # exactly one block, refuses if the purchase is not in the mempool
+./pubky-marketplace wait <bundle> confirmed
+./pubky-marketplace status <bundle>         # signed Paykit status and purchase state (completed at 1 confirmation)
+```
+
+For Bitkit wallets, build each simulator or emulator against this fixture before its first launch:
+
+- iOS: build with `E2E_BUILD E2E_BACKEND=local E2E_NETWORK=regtest E2E_HOMESERVER_PUBKY=<homeserver>`, where `<homeserver>` is `./pubky-marketplace info | jq -r .homeserver_z32`. Electrum resolves to `tcp://127.0.0.1:60001` with no override.
+- Android: build the local E2E backend with the same `E2E_HOMESERVER_PUBKY` in the environment. On each emulator run `adb reverse tcp:<port> tcp:<port>` for 6286, 6287, 6288, 15411 and 15412; the Android journey README covers the emulator's `10.0.2.2` host address.
+- In each wallet create a Bitkit-generated Pubky identity (not a Pubky Ring import) and enable contact payments.
+
+Then, with the buyer wallet:
+
+```bash
+./pubky-marketplace info | jq -r .seller.pubky        # save this seller as a contact in the buyer wallet
+./pubky-marketplace fund <buyer bcrt1 address> 1000000  # sends coins and mines one funding block
+./pubky-marketplace purchase --buyer <buyer pubky>    # the Payment Request appears in the buyer wallet
+```
+
+Pay the request in the app, then confirm with `./pubky-marketplace mine --bundle <bundle>`, `./pubky-marketplace wait <bundle> confirmed` and `./pubky-marketplace status <bundle>`. The seller in a driver purchase is the fixture's headless seller, because publishing the payment lock needs the seller's identity secret. To check only the watch-only claim in a Bitkit seller wallet, run `./pubky-marketplace setup-url`, open the printed `auth_url` in that wallet (the URL holds a one-time secret, so keep it out of logs and evidence), approve it, then `./pubky-marketplace setup-wait <flow>`.
+
+Remove the fixture with `./pubky-marketplace down`, or start over with `./pubky-marketplace reset`. The Pubky testnet keeps its accounts in memory, so the fixture cannot restart with its state and `down` deletes it (the regtest chain stays). `./pubky-marketplace --help` lists every command. See [docs/pubky-marketplace.md](docs/pubky-marketplace.md) for the pins, ports, roles and what the fixture does not cover.
 
 #### Bech32 LNURL Pay
 

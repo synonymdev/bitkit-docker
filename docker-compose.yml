@@ -330,11 +330,132 @@ services:
       - ./.trezor-user-env/logs/mcp-screenshots:/trezor-user-env/logs/mcp-screenshots
       - ./.trezor-user-env/firmware/user_downloaded:/trezor-user-env/src/binaries/firmware/bin/user_downloaded
 
+  # ---------------------------------------------------------------------------
+  # Pubky marketplace fixture (profile "marketplace"). Not started by a plain
+  # `docker compose up`. Drive it with ./pubky-marketplace; see docs/pubky-marketplace.md.
+  # bitcoind and electrs above are the chain half of the fixture (Electrum on 60001).
+  # ---------------------------------------------------------------------------
+  marketplace-postgres:
+    profiles: [marketplace]
+    container_name: marketplace-postgres
+    image: postgres:16-alpine
+    restart: "no" # the fixture is disposable: a restarted testnet loses its accounts
+    environment:
+      POSTGRES_DB: paykit
+      POSTGRES_USER: marketplace
+      POSTGRES_PASSWORD: marketplace
+    volumes:
+      - marketplace_postgres_data:/var/lib/postgresql/data
+      - ./marketplace/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketplace -d paykit"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # Pubky Core static testnet: DHT, PKARR relay, HTTP relay and one homeserver.
+  # The pinned Pubky clients (Bitkit E2E builds, Paykit Server) resolve this
+  # testnet on fixed localhost ports, so those ports are published unchanged on
+  # the host loopback and paykit-server and marketplace-driver join this
+  # container's network namespace.
+  pubky-testnet:
+    profiles: [marketplace]
+    container_name: marketplace-pubky-testnet
+    image: bitkit-docker/pubky-testnet:f68014c1
+    build:
+      context: ./marketplace/pubky-testnet
+    restart: "no" # the fixture is disposable: a restarted testnet loses its accounts
+    depends_on:
+      marketplace-postgres:
+        condition: service_healthy
+    command: ["pubky-testnet", "--homeserver-config", "/etc/pubky-homeserver/config.toml"]
+    volumes:
+      - ./marketplace/homeserver.toml:/etc/pubky-homeserver/config.toml:ro
+    ports:
+      - "127.0.0.1:6881:6881/udp"
+      - "127.0.0.1:6881:6881/tcp"
+      - "127.0.0.1:15411:15411" # PKARR relay
+      - "127.0.0.1:15412:15412" # HTTP relay
+      - "127.0.0.1:6286:6286" # homeserver ICANN HTTP
+      - "127.0.0.1:6287:6287" # homeserver Pubky TLS
+      - "127.0.0.1:${MARKETPLACE_HOMESERVER_ADMIN_PORT:-16288}:6288" # homeserver admin (6288 is homegate's)
+      - "127.0.0.1:${MARKETPLACE_PAYKIT_PORT:-3001}:3001" # paykit-server, shares this namespace
+
+  # Paykit Server 867fc883 (merge of pubky/paykit-server#2), built from source
+  # with the upstream Dockerfile.local. `./pubky-marketplace build` first checks out
+  # the pinned trees under .marketplace/sources; Dockerfile.local fails closed
+  # if a tree differs from the pins in Paykit Server's Cargo manifests.
+  paykit-server:
+    profiles: [marketplace]
+    container_name: marketplace-paykit-server
+    image: bitkit-docker/paykit-server:867fc883
+    build:
+      context: ./.marketplace/sources/paykit-server
+      dockerfile: Dockerfile.local
+      additional_contexts:
+        paykit-lib: ./.marketplace/sources/paykit-rs/paykit-lib
+        paykit-sdk: ./.marketplace/sources/paykit-rs/paykit-sdk
+        locks: ./.marketplace/sources/locks
+    restart: "no" # the fixture is disposable: a restarted testnet loses its accounts
+    network_mode: service:pubky-testnet
+    depends_on:
+      marketplace-postgres:
+        condition: service_healthy
+      electrs:
+        condition: service_started
+      pubky-testnet:
+        condition: service_started
+    environment:
+      PAYKIT_CONFIG: /state/paykit/paykit-server.toml
+      PAYKIT_DATABASE_URL: postgres://marketplace:marketplace@marketplace-postgres:5432/paykit
+    volumes:
+      - marketplace_state:/state:ro
+    # The master key and the generated config live in /state/paykit, written by
+    # `marketplace-driver init`; they never appear in compose or inspect output.
+    # The driver's seeds sit in /state/secrets (mode 0700, root), out of this
+    # container's reach.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until [ -s /state/paykit/paykit-server.toml ] && [ -s /state/paykit/master-key ]; do
+          echo '[marketplace] waiting for marketplace-driver init'
+          sleep 1
+        done
+        PAYKIT_MASTER_KEY="$$(cat /state/paykit/master-key)"
+        export PAYKIT_MASTER_KEY
+        exec /usr/local/bin/paykit-server
+
+  # The fixture driver. Runs one-shot commands (`docker compose run`) through
+  # the ./pubky-marketplace wrapper. It carries the paykit-companion-auth and
+  # paykit-reader-demo helper binaries from the paykit-server image.
+  marketplace-driver:
+    profiles: [marketplace]
+    image: bitkit-docker/marketplace-driver:local
+    build:
+      context: ./marketplace/driver
+      additional_contexts:
+        paykit: service:paykit-server
+    network_mode: service:pubky-testnet
+    depends_on:
+      - pubky-testnet
+    environment:
+      BITCOIN_RPC_URL: http://bitcoind:43782
+      BITCOIN_RPC_USER: polaruser
+      BITCOIN_RPC_PASS: polarpass
+      PAYKIT_URL: http://127.0.0.1:3001
+    volumes:
+      - marketplace_state:/state
+      - ./.marketplace/evidence:/evidence
+    entrypoint: ["node", "/app/driver.mjs"]
+
 volumes:
   bitcoin_home:
   postgres_data:
   lnurl_auth_data:
   homegate_postgres_data:
   homegate_data:
+  marketplace_postgres_data:
+  marketplace_state:
 
 networks: {}

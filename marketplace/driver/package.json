@@ -1,0 +1,12 @@
+{
+  "name": "bitkit-docker-marketplace-driver",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Purchase driver for the Pubky marketplace test fixture",
+  "dependencies": {
+    "@noble/hashes": "1.8.0",
+    "@scure/bip32": "1.7.0",
+    "@synonymdev/pubky": "0.9.3"
+  }
+}

@@ -8,3 +8,4 @@ target/
 .vscode/
 .trezor-user-env/
 __pycache__/
+.marketplace/

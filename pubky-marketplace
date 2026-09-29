@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# Pubky marketplace test fixture for Bitkit's marketplace wallet journey.
+# Docs: docs/pubky-marketplace.md and the "Pubky marketplace fixture" section of README.md.
+
+set -euo pipefail
+
+CLI_NAME="$(basename "$0")"
+cd "$(dirname "$0")"
+
+# Pinned upstream revisions (Paykit Server 867fc883 is the merge of pubky/paykit-server#2).
+# Pubky Core is pinned in marketplace/pubky-testnet/Dockerfile.
+PAYKIT_SERVER_REV=867fc883125c7b89a7b712c2551619cccdfdc0f7
+PAYKIT_RS_REV=6b241878a9bba5cecea919c0298c3f90624be6ff   # paykit-server's paykit-lib and paykit-sdk pin
+LOCKS_REV=df5ea1b6d8dcdec3a9b5a915c3f57bca69d75c8a       # paykit-server's locks-core pin
+
+SOURCES=.marketplace/sources
+PAYKIT_PORT="${MARKETPLACE_PAYKIT_PORT:-3001}"
+COMPOSE=(docker compose --profile marketplace)
+CHAIN_SERVICES=(bitcoind bitcoinsetup electrs)
+FIXTURE_SERVICES=(marketplace-postgres pubky-testnet paykit-server)
+
+show_help() {
+  cat <<EOF
+Pubky marketplace fixture: Pubky testnet, Paykit Server 867fc883, regtest chain and a purchase driver.
+Usage: ${CLI_NAME} <command> [options]
+Stack:
+    build                              Fetch the pinned sources and build the images
+    up                                 Build if needed, start the chain and the fixture, wait until ready
+    ps                                 Show the fixture containers and Paykit Server readiness
+    logs [service]                     Follow the fixture logs
+    down                               Remove the fixture containers and state (the chain stays)
+    reset                              down, then up: a fresh testnet, Paykit database and seller
+Fixture:
+    seed [--buyer headless|none]       Mine to maturity, create the seller wallet and identity, complete the
+                                       watch-only setup, optionally create a headless buyer
+    info                               Public fixture facts: homeserver key, seller, buyer, ports
+    setup-url                          New watch-only setup auth URL for a Bitkit wallet to approve
+    setup-wait <flow>                  Wait until an approved setup flow completes
+    fund <address> [sats]              Send regtest coins (default 1000000 sats) and mine one block
+Purchase:
+    purchase [--sats N] [--buyer headless|<pubky>]
+                                       Create one purchase; print bundle id, address and delivery state
+    receive <bundle>                   Headless buyer: receive the Payment Request and validate it
+    pay <bundle>                       Headless buyer: pay the derived address from the regtest wallet
+    status <bundle>                    Signed Paykit status and purchase state
+    mine [--bundle <id>]               Mine exactly one block; print height, hash and confirmed purchases
+    wait <bundle> <detected|confirmed> [seconds]
+                                       Wait for a signed Paykit status
+    verify                             Whole headless journey with assertions; writes .marketplace/evidence/
+EOF
+}
+
+compose() { "${COMPOSE[@]}" "$@"; }
+
+driver() { compose run --rm --no-deps --quiet-build -T marketplace-driver "$@"; }
+
+project_name() { docker compose config --format json | jq -r '.name'; }
+
+fetch_pinned() {
+  local url="$1" dir="$2" rev="$3"
+  if [ ! -d "$dir/.git" ]; then
+    mkdir -p "$dir"
+    git -C "$dir" init -q
+    git -C "$dir" remote add origin "$url"
+  fi
+  if [ "$(git -C "$dir" rev-parse -q --verify HEAD 2>/dev/null || true)" != "$rev" ]; then
+    git -C "$dir" fetch -q --depth 1 origin "$rev"
+    git -C "$dir" checkout -q --detach FETCH_HEAD
+  fi
+  if [ "$(git -C "$dir" rev-parse HEAD)" != "$rev" ]; then
+    echo "$dir is not at $rev" >&2
+    exit 1
+  fi
+  echo "pinned $dir @ ${rev:0:8}"
+}
+
+fetch_sources() {
+  fetch_pinned https://github.com/pubky/paykit-server.git "$SOURCES/paykit-server" "$PAYKIT_SERVER_REV"
+  fetch_pinned https://github.com/pubky/paykit-rs.git "$SOURCES/paykit-rs" "$PAYKIT_RS_REV"
+  fetch_pinned https://github.com/pubky/locks.git "$SOURCES/locks" "$LOCKS_REV"
+}
+
+build() {
+  fetch_sources
+  compose build pubky-testnet paykit-server
+  compose build marketplace-driver
+}
+
+images_present() {
+  docker image inspect bitkit-docker/pubky-testnet:f68014c1 bitkit-docker/paykit-server:867fc883 \
+    bitkit-docker/marketplace-driver:local >/dev/null 2>&1
+}
+
+wait_ready() {
+  local deadline=$(($(date +%s) + ${1:-300}))
+  until [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PAYKIT_PORT}/health/ready" || true)" = "200" ]; do
+    if [ "$(date +%s)" -gt "$deadline" ]; then
+      echo "Paykit Server did not become ready; see: ${CLI_NAME} logs paykit-server" >&2
+      exit 1
+    fi
+    sleep 2
+  done
+  curl -fsS "http://127.0.0.1:${PAYKIT_PORT}/health/ready"
+  echo
+}
+
+up() {
+  mkdir -p .marketplace/evidence
+  images_present || build
+  compose up -d "${CHAIN_SERVICES[@]}" marketplace-postgres pubky-testnet
+  driver init
+  compose up -d paykit-server
+  wait_ready
+  echo "Electrum: tcp://127.0.0.1:60001"
+  echo "Next: ${CLI_NAME} seed"
+}
+
+if [ $# -eq 0 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+  show_help
+  exit 0
+fi
+
+command="$1"
+shift
+
+case "$command" in
+  build) build ;;
+  up) up ;;
+  ps)
+    compose ps "${CHAIN_SERVICES[@]}" "${FIXTURE_SERVICES[@]}" || true
+    curl -s "http://127.0.0.1:${PAYKIT_PORT}/health/ready" || echo "Paykit Server: not reachable"
+    echo
+    ;;
+  logs) compose logs -f --tail 100 "${@:-paykit-server}" ;;
+  down)
+    # The Pubky testnet keeps its homeserver files and DHT in memory, so it cannot
+    # restart with its accounts intact. The fixture is disposable as a whole.
+    project="$(project_name)"
+    compose rm -sfv "${FIXTURE_SERVICES[@]}" marketplace-driver
+    docker volume rm -f "${project}_marketplace_postgres_data" "${project}_marketplace_state" >/dev/null
+    rm -rf .marketplace/evidence
+    ;;
+  reset)
+    "$0" down
+    up
+    ;;
+  seed | info | setup-url | setup-wait | fund | purchase | receive | pay | status | mine | wait | verify)
+    driver "$command" "$@"
+    ;;
+  *)
+    echo "Unknown command: $command" >&2
+    show_help >&2
+    exit 1
+    ;;
+esac
