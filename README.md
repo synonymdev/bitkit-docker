@@ -225,9 +225,17 @@ cancel and pay requests through the shared regtest Bitcoin node. Plain
 ./pubky-marketplace seed
 docker compose --profile marketplace --profile payment-requests build fixture-issuer
 docker compose --profile marketplace --profile payment-requests up -d --no-build fixture-issuer rc56-peer
-curl -fsS http://127.0.0.1:3012/health | jq
-curl -fsS http://127.0.0.1:3013/health | jq
+for port in 3012 3013; do
+  until health=$(curl -fsS "http://127.0.0.1:$port/health"); do sleep 2; done
+  jq <<<"$health"
+done
 ```
+
+The peers sign up on the testnet and publish their endpoints before they listen,
+so `/health` fails for a few seconds after `up`. The loop waits for them, and
+`payment-requests/prepare` does the same for up to 150 seconds. A peer retries
+its setup for two minutes and then exits; if the loop does not end, stop it and
+read `docker compose --profile marketplace --profile payment-requests logs fixture-issuer rc56-peer`.
 
 Each `/health` response gives the identity, receiver path and published
 `btc-regtest-p2wpkh` address. Prepare and verify all one-time J1 states plus
@@ -264,10 +272,11 @@ curl -fsS -X POST http://127.0.0.1:3012/request -H 'content-type: application/js
   -d "$(jq -nc --arg pubky "$APP_PUBKY" '{peer_pubky:$pubky,peer_path:"bitkit/wallet",amount_sats:15000,reference:"rc56-app-history"}')" | jq
 ```
 
-These peers keep their identities and SDK records in memory. After a restart,
-remove `fixture-issuer` and `rc56-peer` with
-`docker compose --profile marketplace --profile payment-requests rm -sf fixture-issuer rc56-peer`,
-then run `./pubky-marketplace reset` and relink the app. `./pubky-marketplace seed`
+These peers keep their identities and SDK records in memory and live in the
+Pubky testnet's network namespace, so `./pubky-marketplace down` and `reset`
+remove them together with the testnet. After `reset`, start them again with the
+`up -d --no-build fixture-issuer rc56-peer` command above, wait for `/health`,
+rerun `payment-requests/prepare` and relink the app. `./pubky-marketplace seed`
 needs outbound internet for Paykit Server setup; the rc56 peer calls use the
 local testnet. The lane still needs a Bitkit build pointed at the local Pubky
 testnet and to verify the requested rows on device. The headless preparation

@@ -2,7 +2,7 @@
 //! Two Compose services run this binary with separate identities and receiver paths.
 #![recursion_limit = "512"]
 
-use std::{env, sync::Arc};
+use std::{env, future::Future, sync::Arc, time::Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
@@ -156,6 +156,31 @@ async fn rpc(method: &str, params: Value) -> Result<Value> {
     Ok(response["result"].clone())
 }
 
+/// Retries a step that depends on the Pubky testnet or bitcoind, which may still be starting when this
+/// container starts (Compose only waits for their containers to exist). Bounded by
+/// `FIXTURE_SETUP_TIMEOUT_SECONDS` (default 120), so a broken dependency still ends in a clear exit.
+async fn retry<T, F, Fut>(what: &str, mut attempt: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let timeout: u64 = env::var("FIXTURE_SETUP_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(120);
+    let deadline = Instant::now() + std::time::Duration::from_secs(timeout);
+    loop {
+        match attempt().await {
+            Ok(value) => return Ok(value),
+            Err(error) if Instant::now() < deadline => {
+                eprintln!("setup: {what} failed, retrying: {error:#}");
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+            Err(error) => return Err(error.context(format!("{what} still failing after {timeout}s"))),
+        }
+    }
+}
+
 async fn setup() -> Result<App> {
     let role = env::var("FIXTURE_ROLE").context("FIXTURE_ROLE is required")?;
     let receiver_path = PaykitReceiverPath::new(match role.as_str() {
@@ -167,17 +192,21 @@ async fn setup() -> Result<App> {
     let bootstrap = PubkySessionBootstrap::with_pubky(pubky, "bitkit-docker.fixture")?
         .with_auth_relay("http://localhost:15412/inbox")?;
     let config = PaykitSdkConfig::new(receiver_path.clone());
-    let secret = PubkyLocalSecretKey::new(Keypair::random().secret_key());
     let homeserver = PubkyPublicKey::from_raw_or_app_key(HOMESERVER)?;
-    let signed_up = bootstrap
-        .sign_up(
-            &secret,
-            ReceiverNoiseSecretKey::random(),
-            &homeserver,
-            None,
-            &config.required_session_capabilities(),
-        )
-        .await?;
+    // A new identity per attempt: a failed sign-up must not leave the retry with a half-created account.
+    let signed_up = retry("sign-up on the local homeserver", || async {
+        let secret = PubkyLocalSecretKey::new(Keypair::random().secret_key());
+        Ok(bootstrap
+            .sign_up(
+                &secret,
+                ReceiverNoiseSecretKey::random(),
+                &homeserver,
+                None,
+                &config.required_session_capabilities(),
+            )
+            .await?)
+    })
+    .await?;
     let provider = SessionProvider(Arc::new(Mutex::new(Some(signed_up.access))));
     let sdk = PaykitSdk::new(
         InMemoryStorage::default(),
@@ -186,31 +215,43 @@ async fn setup() -> Result<App> {
         config,
     )?;
     sdk.initialize().await?;
-    sdk.publish_paykit_receiver_marker(PaykitReceiverCapabilities {
-        private_payments: true,
-        payment_requests: true,
-        receipts: false,
-        outgoing_payments: role == "rc56-peer",
+    retry("receiver marker publication", || async {
+        Ok(sdk
+            .publish_paykit_receiver_marker(PaykitReceiverCapabilities {
+                private_payments: true,
+                payment_requests: true,
+                receipts: false,
+                outgoing_payments: role == "rc56-peer",
+            })
+            .await?)
     })
     .await?;
-    let address = rpc("getnewaddress", json!(["", "bech32"]))
-        .await?
-        .as_str()
-        .context("bitcoind returned no address")?
-        .to_owned();
-    if !address.starts_with("bcrt1q") {
-        bail!("bitcoind did not return a regtest bech32 address");
-    }
+    let address = retry("getnewaddress from bitcoind", || async {
+        let address = rpc("getnewaddress", json!(["", "bech32"]))
+            .await?
+            .as_str()
+            .context("bitcoind returned no address")?
+            .to_owned();
+        if !address.starts_with("bcrt1q") {
+            bail!("bitcoind did not return a regtest bech32 address");
+        }
+        Ok(address)
+    })
+    .await?;
     let endpoint_payload = json!({ "value": address }).to_string();
-    let published = sdk
-        .sync_public_endpoints_with_receiving_details(vec![paykit_sdk::PublicReceivingDetail {
-            identifier: ENDPOINT.into(),
-            payload: endpoint_payload,
-        }])
-        .await?;
-    if !published.failed.is_empty() || published.published.len() != 1 {
-        bail!("Paykit endpoint publication failed");
-    }
+    retry("Paykit endpoint publication", || async {
+        let published = sdk
+            .sync_public_endpoints_with_receiving_details(vec![paykit_sdk::PublicReceivingDetail {
+                identifier: ENDPOINT.into(),
+                payload: endpoint_payload.clone(),
+            }])
+            .await?;
+        if !published.failed.is_empty() || published.published.len() != 1 {
+            bail!("Paykit endpoint publication failed");
+        }
+        Ok(())
+    })
+    .await?;
     Ok(App {
         sdk,
         pubky: signed_up.public_key,
