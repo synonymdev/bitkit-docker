@@ -38,18 +38,26 @@ Fixture:
                                        watch-only setup, optionally create a headless buyer
     info                               Public fixture facts: homeserver key, seller, buyer, ports
     setup-url                          New watch-only setup auth URL for a Bitkit wallet to approve
-    setup-wait <flow>                  Wait until an approved setup flow completes
+    setup-wait <flow>                  Wait until an approved setup flow completes; with a Bitkit seller
+                                       recorded, check the same wallet approved it
+    seller-auth [--relay <url>] [--timeout <seconds>]
+                                       Bitkit seller: print the marketplace write grant (/pub/locks.app/) for the
+                                       seller wallet to approve, with the Android and iOS handoff, wait for it
+                                       and keep the grant session for purchase --seller bitkit
     fund <address> [sats]              Send regtest coins (default 1000000 sats) and mine one block
-    peers [--buyer <pubky>] [--bundle <id>] [--wait <seconds>]
+    peers [--seller headless|bitkit|<pubky>] [--buyer <pubky>] [--bundle <id>] [--wait <seconds>]
                                        Report the seller and buyer as linked peers: receiver markers, setup
                                        authority and Paykit Server's link state (linked is true once connected)
 Purchase:
-    purchase [--sats N] [--buyer headless|<pubky>]
-                                       Create one purchase; print bundle id, address and delivery state
+    purchase [--sats N] [--buyer headless|<pubky>] [--seller headless|bitkit|<pubky>]
+                                       Create one purchase; print bundle id, address and delivery state. A Bitkit
+                                       seller (after seller-auth and setup) is paid at its wallet's derived address
     receive <bundle>                   Headless buyer: receive the Payment Request and validate it
     pay <bundle>                       Headless buyer: pay the derived address from the regtest wallet
     status <bundle>                    Signed Paykit status and purchase state
-    mine [--bundle <id>]               Mine exactly one block; print height, hash and confirmed purchases
+    mine [--bundle <id>] [--address <bcrt1...>]
+                                       Mine exactly one block; print height, hash and the purchase transaction.
+                                       --address names the payout address of a Bitkit seller's purchase
     wait <bundle> <detected|confirmed> [seconds]
                                        Wait for a signed Paykit status
     verify                             Whole headless journey with assertions; writes .marketplace/evidence/
@@ -179,7 +187,7 @@ case "$command" in
     "$0" down
     up
     ;;
-  seed | info | setup-url | setup-wait | fund | peers | purchase | receive | pay | status | mine | wait | verify)
+  seed | info | setup-url | setup-wait | seller-auth | fund | peers | purchase | receive | pay | status | mine | wait | verify)
     driver "$command" "$@"
     ;;
   *)

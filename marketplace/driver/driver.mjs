@@ -7,6 +7,9 @@
 // full marketplace). Roles it can also stand in for, so the whole journey runs
 // without a wallet app: the seller (watch-only setup) and the buyer (receive
 // and pay). Bitkit wallets take the buyer and seller roles in the app journey.
+// A Bitkit seller approves two Pubky grants: the Paykit setup (`setup-url`) and
+// a `/pub/locks.app/` write grant for the marketplace (`seller-auth`), and the
+// driver publishes the payment lock with that grant session.
 //
 // Secrets stay in /state/secrets (root, 0700). Paykit Server only ever sees the
 // seller's account xpub. Nothing here prints a seed, a key or a token.
@@ -18,7 +21,7 @@ import { existsSync } from 'node:fs';
 
 import { blake3 } from '@noble/hashes/blake3';
 import { HDKey } from '@scure/bip32';
-import { Keypair, Pubky, PublicKey } from '@synonymdev/pubky';
+import { AuthFlowKind, Keypair, Pubky, PublicKey } from '@synonymdev/pubky';
 
 const STATE = '/state';
 const SECRETS = `${STATE}/secrets`;
@@ -37,6 +40,13 @@ const SETUP_ORIGIN = 'http://localhost:8080';
 const PAYKIT_CLIENT_ID = 'app.paykit.server';
 // Pubky 0.10 sessions are grants, so a signin names its client.
 const HEADLESS_CLIENT_ID = 'marketplace.fixture';
+// The write grant a Bitkit seller approves for the marketplace (the role Locks plays). The apps show the
+// client id as "Requester ID" and the path as the requested permission.
+const LOCKS_CLIENT_ID = 'locks.app';
+const LOCKS_CAPS = '/pub/locks.app/:rw';
+// The testnet's own HTTP relay; wallets reach it on localhost like the homeserver (Android: adb reverse 15412).
+const LOCKS_RELAY = 'http://localhost:15412/inbox/';
+const BITKIT_SESSION_SECRET = 'bitkit-seller.session';
 const SERVER_PATH = 'bitkit/server';
 const BUYER_PATH = 'bitkit/wallet';
 const ACCOUNT_INDEX = 0;
@@ -230,10 +240,33 @@ async function signUpIdentity(seed) {
   return keypair.publicKey.toString();
 }
 
-async function sellerSession() {
-  const seed = Buffer.from(await readSecret('seller-identity.seed'), 'base64url');
-  const signer = pubkyClient().signer(Keypair.fromSecret(seed));
-  return signer.signin(HEADLESS_CLIENT_ID);
+// A write session on the seller's /pub/locks.app/, for publishing the payment lock. The headless seller signs
+// in with its own key. A Bitkit seller has no key here: the session is the grant its wallet approved in
+// `seller-auth`, restored from the state volume (each restore mints a fresh short-lived bearer).
+async function sellerSession(seller) {
+  if (seller.kind === 'headless') {
+    const seed = Buffer.from(await readSecret('seller-identity.seed'), 'base64url');
+    return pubkyClient().signer(Keypair.fromSecret(seed)).signin(HEADLESS_CLIENT_ID);
+  }
+  const session = await pubkyClient().restoreSession(await readSecret(BITKIT_SESSION_SECRET));
+  if (session.info.publicKey.toString() !== seller.pubky) fail('the stored Bitkit seller session belongs to another identity; run: ./pubky-marketplace seller-auth');
+  return session;
+}
+
+// The seller record for `--seller`: the headless seller (default), the Bitkit seller, or its approved pubky.
+function pickSeller(fixture, which = 'headless') {
+  if (which === 'headless') return fixture.seller;
+  const bitkit = fixture.bitkit_seller;
+  if (!bitkit) fail('no Bitkit seller; run: ./pubky-marketplace seller-auth');
+  if (which === 'bitkit' || which === bitkit.pubky) return bitkit;
+  fail(`--seller must be headless, bitkit or ${bitkit.pubky}`);
+}
+
+const sellerOf = (fixture, pubky) => [fixture.seller, fixture.bitkit_seller].find((entry) => entry?.pubky === pubky) ?? fixture.seller;
+
+async function setupStatus(pubky) {
+  const response = await signedPost('/setup/status', { creator: pubky });
+  return response.status === 200 ? response.json.status : `unavailable_http_${response.status}`;
 }
 
 // ----------------------------------------------------------- helper binaries
@@ -370,6 +403,21 @@ async function beginSetup() {
   return { flowId: JSON.parse(flow[1]), authUrl };
 }
 
+// The watch-only setup approval: the wallet's role in Paykit Server's /setup flow. The wallet gives the server
+// its account xpub with the companion claim, then approves the setup grant with its Pubky identity.
+async function approveSetupAs(authUrl, identitySeed, xpub, accountIndex) {
+  const approval = await runHelper('paykit-companion-auth', {
+    version: 1,
+    auth_url: authUrl,
+    creator_secret: b64url(identitySeed),
+    account_xpub: xpub,
+    account_index: accountIndex,
+  });
+  if (approval.code !== 0 || !approval.stdout.includes('"approved"')) {
+    fail(`companion approval failed: ${approval.stderr || approval.stdout}`);
+  }
+}
+
 async function setupUrl() {
   await waitForPaykit();
   const { flowId, authUrl } = await beginSetup();
@@ -377,7 +425,9 @@ async function setupUrl() {
   out({
     flow_id: flowId,
     auth_url: authUrl,
-    // iOS has no pubkyauth handler: hand the same query to Bitkit as bitkit://pubky-auth/setup?<query>.
+    // Android opens the grant URL directly. iOS has no pubkyauth handler: hand the same query to Bitkit as
+    // bitkit://pubky-auth/setup?<query>.
+    android: `adb shell am start -a android.intent.action.VIEW -d '${authUrl}'`,
     ios_url: `bitkit://pubky-auth/setup?${authUrl.slice(authUrl.indexOf('?') + 1)}`,
     client_id: params.get('cid'),
     claim: params.get('x-bitkit-claim'),
@@ -385,13 +435,34 @@ async function setupUrl() {
   });
 }
 
+// When a Bitkit seller has approved the marketplace grant, the setup must have been approved by the same
+// identity: Paykit Server reports the setup per creator.
 async function setupWait(flowId) {
   if (!flowId) fail('usage: setup-wait <flow>');
   await completeSetup(flowId, 300);
-  out({ flow_id: flowId, status: 'complete' });
+  const fixture = await readJson(FIXTURE_FILE, {});
+  const bitkit = fixture.bitkit_seller;
+  if (!bitkit) {
+    return out({
+      flow_id: flowId,
+      status: 'complete',
+      next: './pubky-marketplace seller-auth (the marketplace grant, approved by the same wallet)',
+    });
+  }
+  let status = await setupStatus(bitkit.pubky);
+  for (let attempt = 0; status !== 'ready' && attempt < 10; attempt++) {
+    await sleep(1500);
+    status = await setupStatus(bitkit.pubky);
+  }
+  if (status !== 'ready') {
+    fail(`setup completed but the Bitkit seller ${bitkit.pubky} is ${status}: the wallet that approved the setup is not the one that approved seller-auth`);
+  }
+  bitkit.setup_completed_at ??= new Date().toISOString();
+  await writeJson(FIXTURE_FILE, fixture);
+  out({ flow_id: flowId, status: 'complete', seller: bitkit.pubky, paykit_setup: 'ready' });
 }
 
-async function createBuyer() {
+async function createBuyer(sellerPubky) {
   const seed = randomBytes(32);
   await writeSecret(`${SECRETS}/buyer-identity.seed`, b64url(seed));
   const buyer = await signUpIdentity(seed);
@@ -402,7 +473,7 @@ async function createBuyer() {
   const prepared = await runHelper(
     'paykit-reader-demo',
     { version: 1, operation: 'prepare', reader_secret: b64url(seed) },
-    readerEnv(fixture.seller.pubky),
+    readerEnv(sellerPubky ?? fixture.seller.pubky),
   );
   if (prepared.code !== 0) fail(`buyer receiver marker failed: ${prepared.stdout || prepared.stderr}`);
   fixture.buyer = { pubky: buyer, receiver_path: BUYER_PATH, kind: 'headless' };
@@ -432,16 +503,7 @@ async function seed(args) {
     const sellerPubky = await signUpIdentity(identitySeed);
     log(`seller identity ${sellerPubky}; completing the watch-only setup`);
     const { flowId, authUrl } = await beginSetup();
-    const approval = await runHelper('paykit-companion-auth', {
-      version: 1,
-      auth_url: authUrl,
-      creator_secret: b64url(identitySeed),
-      account_xpub: xpub,
-      account_index: ACCOUNT_INDEX,
-    });
-    if (approval.code !== 0 || !approval.stdout.includes('"approved"')) {
-      fail(`companion approval failed: ${approval.stderr || approval.stdout}`);
-    }
+    await approveSetupAs(authUrl, identitySeed, xpub, ACCOUNT_INDEX);
     await completeSetup(flowId);
     fixture = {
       homeserver: HOMESERVER,
@@ -493,6 +555,15 @@ async function publicInfo() {
           spending_authority: 'held only in the fixture state volume, never given to Paykit Server',
         }
       : null,
+    bitkit_seller: fixture.bitkit_seller
+      ? {
+          pubky: fixture.bitkit_seller.pubky,
+          kind: fixture.bitkit_seller.kind,
+          marketplace_grant: `${fixture.bitkit_seller.client_id} ${fixture.bitkit_seller.capabilities}`,
+          setup_completed_at: fixture.bitkit_seller.setup_completed_at ?? null,
+          spending_authority: 'held only in the seller wallet; the fixture holds a marketplace grant session and no xpub',
+        }
+      : null,
     buyer: fixture.buyer ?? null,
     purchases: purchases.length,
     latest_purchase: purchases.at(-1) ?? null,
@@ -533,38 +604,72 @@ async function issuerPubky() {
   return Keypair.fromSecret(seed).publicKey.toString();
 }
 
-async function expectedAddress(fixture, child) {
-  const info = await rpc('getdescriptorinfo', [`wpkh(${fixture.seller.account_xpub}/0/*)`]);
+async function expectedAddress(xpub, child) {
+  const info = await rpc('getdescriptorinfo', [`wpkh(${xpub}/0/*)`]);
   const addresses = await rpc('deriveaddresses', [info.descriptor, [child, child]]);
   return addresses[0];
 }
 
+// Where a purchase is paid. A headless seller's address is derived from its xpub before the purchase is
+// delivered. A Bitkit seller's xpub never leaves its wallet and Paykit Server exposes neither the xpub nor the
+// derived address, so the fixture learns the address from the delivered Payment Request (`receive`), from the
+// operator (`mine --address`) or from the transaction that pays the exact amount.
+const paymentAddress = (purchase) => purchase.derived_address ?? purchase.payout_address ?? null;
+
+async function validatePayoutAddress(address) {
+  const info = await rpc('validateaddress', [address]);
+  if (!info.isvalid || !info.iswitness || info.witness_version !== 0 || info.witness_program?.length !== 40) {
+    fail(`${address} is not a regtest native SegWit (p2wpkh) address`);
+  }
+}
+
+async function setPayoutAddress(purchases, purchase, address, source) {
+  if (purchase.derived_address) {
+    if (address !== purchase.derived_address) fail('the address is not the seller xpub child for this purchase');
+    return;
+  }
+  if (purchase.payout_address === address) return;
+  if (purchase.payout_address) fail(`the purchase already has payout address ${purchase.payout_address}`);
+  await validatePayoutAddress(address);
+  purchase.payout_address = address;
+  purchase.payout_address_source = source;
+  await writeJson(PURCHASES_FILE, purchases);
+}
+
 // The transaction that pays a purchase, whoever paid it. The headless buyer's `pay` records its txid; a
-// Bitkit buyer pays from the app, so the ledger has none. Match on the purchase's derived address and amount
+// Bitkit buyer pays from the app, so the ledger has none. Match on the purchase's address and amount
 // instead: in the mempool first, then in the latest blocks (a confirmed payment is no longer in the mempool).
+// Without a known address, match the one p2wpkh output of exactly the amount.
 const RECENT_BLOCKS = 50;
 
 async function findPaymentTx(purchase, { mempoolOnly = false } = {}) {
-  const pays = (tx) =>
-    tx.vout.some(
+  const address = paymentAddress(purchase);
+  const paid = (tx) =>
+    tx.vout.find(
       (output) =>
-        output.scriptPubKey?.address === purchase.derived_address &&
-        Math.round(output.value * 1e8) === purchase.amount_sats,
+        Math.round(output.value * 1e8) === purchase.amount_sats &&
+        (address ? output.scriptPubKey?.address === address : output.scriptPubKey?.type === 'witness_v0_keyhash'),
     );
   const found = [];
   for (const txid of await rpc('getrawmempool')) {
     // A transaction can leave the mempool between the two calls; skip it then.
     const tx = await rpc('getrawtransaction', [txid, true]).catch(() => null);
-    if (tx && pays(tx)) found.push({ txid, confirmed: false });
+    const output = tx && paid(tx);
+    if (output) found.push({ txid, confirmed: false, address: output.scriptPubKey.address });
   }
   if (!found.length && !mempoolOnly) {
     const { height } = await chainInfo();
     for (let at = height; at > Math.max(0, height - RECENT_BLOCKS) && !found.length; at--) {
       const block = await rpc('getblock', [await rpc('getblockhash', [at]), 2]);
-      for (const tx of block.tx) if (pays(tx)) found.push({ txid: tx.txid, confirmed: true, height: at });
+      for (const tx of block.tx) {
+        const output = paid(tx);
+        if (output) found.push({ txid: tx.txid, confirmed: true, height: at, address: output.scriptPubKey.address });
+      }
     }
   }
-  if (found.length > 1) fail(`more than one transaction pays ${purchase.derived_address}: ${found.map((tx) => tx.txid).join(', ')}`);
+  if (found.length > 1) {
+    fail(`more than one transaction pays ${address ?? `${purchase.amount_sats} sats`} (${found.map((tx) => tx.txid).join(', ')}); pass --address <payout address>`);
+  }
   return found[0] ?? null;
 }
 
@@ -572,11 +677,18 @@ async function findPaymentTx(purchase, { mempoolOnly = false } = {}) {
 async function recordPaymentTx(purchases, purchase, options) {
   const tx = purchase.txid && !options?.mempoolOnly ? { txid: purchase.txid } : await findPaymentTx(purchase, options);
   if (!tx) return null;
+  let changed = false;
   if (purchase.txid !== tx.txid) {
     purchase.txid = tx.txid;
     if (['created', 'delivered'].includes(purchase.state)) purchase.state = 'paid';
-    await writeJson(PURCHASES_FILE, purchases);
+    changed = true;
   }
+  if (tx.address && !paymentAddress(purchase)) {
+    purchase.payout_address = tx.address;
+    purchase.payout_address_source = 'amount_match';
+    changed = true;
+  }
+  if (changed) await writeJson(PURCHASES_FILE, purchases);
   return tx;
 }
 
@@ -585,6 +697,12 @@ async function purchase(args) {
   if (!Number.isInteger(sats) || sats <= 0) fail('--sats must be a positive integer');
   const buyerArg = flag(args, '--buyer') ?? 'headless';
   const fixture = await readFixture();
+  const seller = pickSeller(fixture, flag(args, '--seller') ?? 'headless');
+  await waitForPaykit();
+  if (seller.kind !== 'headless') {
+    const setup = await setupStatus(seller.pubky);
+    if (setup !== 'ready') fail(`the Bitkit seller's Paykit setup is ${setup}; run: ./pubky-marketplace setup-url`);
+  }
   let reader;
   if (buyerArg === 'headless') {
     if (!fixture.buyer) fail('no headless buyer; run: ./pubky-marketplace seed --buyer headless');
@@ -592,19 +710,18 @@ async function purchase(args) {
   } else {
     reader = buyerArg;
   }
-  await waitForPaykit();
   const purchases = await readJson(PURCHASES_FILE, []);
-  const childIndex = purchases.filter((entry) => entry.seller === fixture.seller.pubky).length;
+  const childIndex = purchases.filter((entry) => entry.seller === seller.pubky).length;
 
-  const lock = lockFor({ seller: fixture.seller.pubky, sats, issuer: await issuerPubky() });
+  const lock = lockFor({ seller: seller.pubky, sats, issuer: await issuerPubky() });
   const lockText = canonical(lock);
   const lockId = crockford(blake3(Buffer.from(lockText)));
   const lockPath = `/pub/locks.app/${lockId}.json`;
-  const session = await sellerSession();
+  const session = await sellerSession(seller);
   await session.storage.putText(lockPath, lockText);
 
   const bundleId = newBundleId();
-  const lockResource = `${fixture.seller.pubky}${lockPath}`;
+  const lockResource = `${seller.pubky}${lockPath}`;
   const response = await signedPost('/invoices', { bundle_id: bundleId, lock_resource: lockResource, reader });
   if (response.status !== 204) {
     const code = response.json?.error?.code ? ` ${response.json.error.code}` : '';
@@ -616,15 +733,17 @@ async function purchase(args) {
   }
   const record = {
     bundle_id: bundleId,
-    seller: fixture.seller.pubky,
+    seller: seller.pubky,
+    seller_kind: seller.kind,
     reader,
     buyer_kind: buyerArg === 'headless' ? 'headless' : 'external',
     amount_sats: sats,
     asset: EXPECTED_ASSET,
     endpoint: EXPECTED_ENDPOINT,
     lock_resource: lockResource,
-    derived_address: await expectedAddress(fixture, childIndex),
-    child_index: childIndex,
+    // Only a seller whose xpub the fixture holds has a derived address it can check.
+    derived_address: seller.kind === 'headless' ? await expectedAddress(seller.account_xpub, childIndex) : null,
+    child_index: seller.kind === 'headless' ? childIndex : null,
     created_at: new Date().toISOString(),
     state: 'created',
   };
@@ -652,7 +771,6 @@ async function findPurchase(bundleId) {
 }
 
 async function receive(args) {
-  const fixture = await readFixture();
   const { purchases, purchase } = await findPurchase(args[0]);
   if (purchase.buyer_kind !== 'headless') fail('receive is for the headless buyer; a Bitkit buyer receives in the app');
   const seed = await readSecret('buyer-identity.seed');
@@ -660,7 +778,7 @@ async function receive(args) {
   const result = await runHelper(
     'paykit-reader-demo',
     { version: 1, operation: 'receive', reader_secret: seed },
-    readerEnv(fixture.seller.pubky),
+    readerEnv(purchase.seller),
   );
   if (result.code !== 0) fail(`receive failed: ${result.stdout || result.stderr}`);
   const request = JSON.parse(result.stdout);
@@ -669,7 +787,9 @@ async function receive(args) {
   if (request.status !== 'received' || request.asset !== EXPECTED_ASSET) fail('Payment Request is not canonical lowercase btc');
   if (!request.address.startsWith('bcrt1')) fail('Payment Request address is not regtest');
   if (request.amount_sats !== String(purchase.amount_sats)) fail('Payment Request amount does not match the purchase');
-  if (request.address !== purchase.derived_address) fail('Payment Request address is not the seller xpub child for this purchase');
+  // A Bitkit seller's xpub is not here: the delivered address is checked to be a regtest p2wpkh address and
+  // kept as the address the purchase must be paid to. Whether it belongs to the seller's wallet shows in the app.
+  await setPayoutAddress(purchases, purchase, request.address, 'payment_request');
   purchase.payment_request_id = request.payment_request_id;
   purchase.delivery = 'received';
   purchase.state = 'delivered';
@@ -682,20 +802,25 @@ async function receive(args) {
     endpoint: EXPECTED_ENDPOINT,
     address: request.address,
     amount_sats: Number(request.amount_sats),
-    address_derived_from_seller_xpub: true,
+    address_derived_from_seller_xpub: purchase.derived_address ? true : null,
+    address_check: purchase.derived_address
+      ? 'equals the seller xpub child for this purchase'
+      : 'regtest p2wpkh only; the fixture has no xpub for a Bitkit seller',
   });
 }
 
 async function pay(args) {
   const { purchases, purchase } = await findPurchase(args[0]);
   await ensureMatureCoins();
-  const txid = await rpc('sendtoaddress', [purchase.derived_address, satsToBtc(purchase.amount_sats)]);
+  const address = paymentAddress(purchase);
+  if (!address) fail('the payment address is not known yet; run: ./pubky-marketplace receive <bundle>');
+  const txid = await rpc('sendtoaddress', [address, satsToBtc(purchase.amount_sats)]);
   purchase.txid = txid;
   purchase.state = 'paid';
   await writeJson(PURCHASES_FILE, purchases);
   const mempool = await rpc('getrawmempool');
   const tx = await rpc('getrawtransaction', [txid, true]);
-  const match = tx.vout.find((output) => output.scriptPubKey.address === purchase.derived_address);
+  const match = tx.vout.find((output) => output.scriptPubKey.address === address);
   out({
     bundle_id: purchase.bundle_id,
     txid,
@@ -719,7 +844,10 @@ async function statusCommand(args) {
     reader: purchase.reader,
     payment_request_id: purchase.payment_request_id ?? null,
     delivery: purchase.delivery ?? null,
-    derived_address: purchase.derived_address,
+    seller_kind: purchase.seller_kind ?? 'headless',
+    derived_address: purchase.derived_address ?? null,
+    payout_address: paymentAddress(purchase),
+    payout_address_source: purchase.derived_address ? 'seller_xpub' : (purchase.payout_address_source ?? null),
     amount_sats: purchase.amount_sats,
     txid: purchase.txid ?? null,
     paykit_status: paykit,
@@ -733,13 +861,17 @@ async function mine(args) {
   const before = await chainInfo();
   const mempoolBefore = await rpc('getrawmempool');
   let payment = null;
+  let payoutAddress = null;
   if (bundle) {
     const { purchases, purchase } = await findPurchase(bundle);
+    const address = flag(args, '--address');
+    if (address) await setPayoutAddress(purchases, purchase, address, 'operator');
     // The headless buyer's txid is in the ledger; for any other buyer find the payment by address and amount.
     payment = purchase.txid && mempoolBefore.includes(purchase.txid)
       ? { txid: purchase.txid }
       : await recordPaymentTx(purchases, purchase, { mempoolOnly: true });
     if (!payment) fail('the purchase transaction is not in the mempool');
+    payoutAddress = paymentAddress(purchase);
   }
   const [block] = await mineBlocks(1);
   const after = await chainInfo();
@@ -748,7 +880,7 @@ async function mine(args) {
     mined: 1,
     height: after.height,
     block,
-    ...(payment ? { bundle_id: bundle, txid: payment.txid } : {}),
+    ...(payment ? { bundle_id: bundle, txid: payment.txid, payout_address: payoutAddress } : {}),
     mempool_before: mempoolBefore.length,
     mempool_after: (await rpc('getrawmempool')).length,
   });
@@ -781,19 +913,23 @@ async function receiverMarker(pubky, receiverPath) {
   return { path, present: true, marker: await storage.getJson(`${pubky}${path}`) };
 }
 
-async function peerReport({ fixture, purchases, buyerArg, bundleArg }) {
-  const reader = buyerArg ?? (bundleArg ? undefined : purchases.at(-1)?.reader) ?? fixture.buyer?.pubky;
+async function peerReport({ fixture, purchases, buyerArg, bundleArg, sellerArg }) {
+  // The seller is --seller, else the seller of the bundle or latest purchase, else the headless seller.
+  const chosen = sellerArg ? pickSeller(fixture, sellerArg) : null;
+  const ofSeller = (entry) => !chosen || entry.seller === chosen.pubky;
+  const reader = buyerArg ?? (bundleArg ? undefined : purchases.filter(ofSeller).at(-1)?.reader) ?? fixture.buyer?.pubky;
   if (!reader) fail('no buyer; pass --buyer <pubky> or run: ./pubky-marketplace seed --buyer headless');
   const purchase = bundleArg
     ? purchases.find((entry) => entry.bundle_id === bundleArg)
-    : purchases.filter((entry) => entry.reader === reader).at(-1);
+    : purchases.filter((entry) => entry.reader === reader && ofSeller(entry)).at(-1);
   if (bundleArg && !purchase) fail(`unknown bundle ${bundleArg}`);
+  const seller = chosen ?? sellerOf(fixture, purchase?.seller);
   const headless = fixture.buyer?.pubky === reader;
 
-  const setup = await signedPost('/setup/status', { creator: fixture.seller.pubky });
+  const setup = await signedPost('/setup/status', { creator: seller.pubky });
   let serverSide = 'no_purchase_yet';
   if (purchase) {
-    const state = await signedPost('/connections/status', { creator: fixture.seller.pubky, bundle_id: purchase.bundle_id });
+    const state = await signedPost('/connections/status', { creator: seller.pubky, bundle_id: purchase.bundle_id });
     serverSide = state.status === 200 ? state.json.state : `unavailable_http_${state.status}`;
   }
   let buyerSide = null;
@@ -801,17 +937,17 @@ async function peerReport({ fixture, purchases, buyerArg, bundleArg }) {
     const inspected = await runHelper(
       'paykit-reader-demo',
       { version: 1, operation: 'inspect', reader_secret: await readSecret('buyer-identity.seed') },
-      readerEnv(fixture.seller.pubky),
+      readerEnv(seller.pubky),
     );
     buyerSide = inspected.code === 0 ? JSON.parse(inspected.stdout).connection_state : 'unavailable';
   }
-  const sellerMarker = await receiverMarker(fixture.seller.pubky, SERVER_PATH);
+  const sellerMarker = await receiverMarker(seller.pubky, SERVER_PATH);
   const buyerMarker = await receiverMarker(reader, BUYER_PATH);
   const sellerReady = setup.status === 200 && setup.json?.status === 'ready' && sellerMarker.present;
   return {
     seller: {
-      pubky: fixture.seller.pubky,
-      kind: fixture.seller.kind,
+      pubky: seller.pubky,
+      kind: seller.kind,
       receiver_path: SERVER_PATH,
       setup: setup.status === 200 ? setup.json.status : `unavailable_http_${setup.status}`,
       receiver_marker: sellerMarker,
@@ -841,7 +977,7 @@ async function peers(args) {
   const fixture = await readFixture();
   const purchases = await readJson(PURCHASES_FILE, []);
   const waitSeconds = Number(flag(args, '--wait') ?? 0);
-  if (!Number.isFinite(waitSeconds) || waitSeconds < 0) fail('usage: peers [--buyer <pubky>] [--bundle <id>] [--wait <seconds>]');
+  if (!Number.isFinite(waitSeconds) || waitSeconds < 0) fail('usage: peers [--seller headless|bitkit|<pubky>] [--buyer <pubky>] [--bundle <id>] [--wait <seconds>]');
   await waitForPaykit();
   const deadline = Date.now() + waitSeconds * 1000;
   for (;;) {
@@ -850,6 +986,7 @@ async function peers(args) {
       purchases: await readJson(PURCHASES_FILE, purchases),
       buyerArg: flag(args, '--buyer'),
       bundleArg: flag(args, '--bundle'),
+      sellerArg: flag(args, '--seller'),
     });
     if (report.linked || !waitSeconds || Date.now() > deadline) {
       out(report);
@@ -927,12 +1064,105 @@ async function verify() {
   out(evidence);
 }
 
+// ---------------------------------------------------------------- Bitkit seller
+
+const androidOpen = (authUrl) => `adb shell am start -a android.intent.action.VIEW -d '${authUrl}'`;
+
+// The marketplace's request for a write grant on the seller's /pub/locks.app/, shown to the seller as a Pubky
+// auth request (the role Locks plays). The flow polls the relay as long as this process runs.
+async function startLocksGrant(relay) {
+  const flow = await pubkyClient().startGrantAuthFlow(LOCKS_CAPS, AuthFlowKind.signin(), { clientId: LOCKS_CLIENT_ID, relay });
+  const authUrl = flow.authorizationUrl;
+  if (!authUrl.startsWith('pubkyauth://signin_grant?') || !authParams(authUrl).get('cpk')) {
+    fail('the marketplace grant URL is not a Pubky grant URL with cpk; check the @synonymdev/pubky version');
+  }
+  return { flow, authUrl };
+}
+
+async function awaitGrant(flow, seconds) {
+  const deadline = Date.now() + seconds * 1000;
+  for (;;) {
+    const session = await flow.tryPollOnce();
+    if (session) return session;
+    if (Date.now() > deadline) fail(`no approval within ${seconds}s; run seller-auth again for a fresh request`);
+    await sleep(1000);
+  }
+}
+
+// A grant covers the lock directory when one of its capabilities is a write on that path or a parent of it.
+const writesLocks = (capabilities) =>
+  capabilities.some((cap) => {
+    const at = cap.lastIndexOf(':');
+    return cap.slice(at + 1).includes('w') && '/pub/locks.app/'.startsWith(cap.slice(0, at));
+  });
+
+// Keep the approved grant as the seller's write session and record the identity that approved it.
+async function adoptBitkitSeller(session, kind) {
+  const capabilities = session.info.capabilities;
+  if (!writesLocks(capabilities)) fail(`the approved grant does not allow writing ${LOCKS_CAPS}: ${JSON.stringify(capabilities)}`);
+  const pubky = session.info.publicKey.toString();
+  const secret = await session.exportLocalSecret();
+  const restored = await pubkyClient().restoreSession(secret);
+  if (restored.info.publicKey.toString() !== pubky) fail('the exported grant session restores to another identity');
+  await writeSecret(`${SECRETS}/${BITKIT_SESSION_SECRET}`, secret);
+  const fixture = await readFixture();
+  const previous = fixture.bitkit_seller?.pubky === pubky ? fixture.bitkit_seller : {};
+  const paykitSetup = await setupStatus(pubky);
+  fixture.bitkit_seller = {
+    ...previous,
+    pubky,
+    kind,
+    client_id: LOCKS_CLIENT_ID,
+    capabilities: LOCKS_CAPS,
+    marketplace_grant_at: new Date().toISOString(),
+    ...(paykitSetup === 'ready' ? { setup_completed_at: previous.setup_completed_at ?? new Date().toISOString() } : {}),
+  };
+  await writeJson(FIXTURE_FILE, fixture);
+  return { seller: fixture.bitkit_seller, paykitSetup };
+}
+
+// Print the marketplace grant request for the Bitkit seller wallet, wait for its approval and keep the grant
+// session that `purchase --seller bitkit` publishes the payment lock with.
+async function sellerAuth(args) {
+  const relay = flag(args, '--relay') ?? LOCKS_RELAY;
+  const seconds = Number(flag(args, '--timeout') ?? 300);
+  if (!Number.isFinite(seconds) || seconds <= 0) fail('usage: seller-auth [--relay <url>] [--timeout <seconds>]');
+  await readFixture();
+  const { flow, authUrl } = await startLocksGrant(relay);
+  out({
+    status: 'awaiting_approval',
+    client_id: LOCKS_CLIENT_ID,
+    capabilities: LOCKS_CAPS,
+    relay,
+    auth_url: authUrl,
+    android: androidOpen(authUrl),
+    // iOS registers no pubkyauth handler and bitkit://pubky-auth/setup accepts only the setup request: put
+    // auth_url on the simulator's clipboard, then Scan QR Code, Paste QR Code (E2E builds: Enter QRCode String).
+    ios: {
+      clipboard: `printf %s '${authUrl}' | xcrun simctl pbcopy <simulator-id>`,
+      in_app: 'Scan QR Code sheet, then Paste QR Code',
+    },
+    wait_seconds: seconds, // the relay keeps the request for about 5 minutes
+  });
+  const session = await awaitGrant(flow, seconds);
+  const { seller, paykitSetup } = await adoptBitkitSeller(session, 'bitkit');
+  out({
+    status: 'approved',
+    seller: seller.pubky,
+    client_id: seller.client_id,
+    capabilities: session.info.capabilities,
+    paykit_setup: paykitSetup,
+    next: paykitSetup === 'ready' ? './pubky-marketplace purchase --seller bitkit' : './pubky-marketplace setup-url',
+  });
+}
+
 const commands = {
   init: () => init(),
   seed,
   info: async () => out(await publicInfo()),
   'setup-url': () => setupUrl(),
   'setup-wait': (args) => setupWait(args[0]),
+  'seller-auth': sellerAuth,
   fund,
   purchase,
   receive,
@@ -951,6 +1181,9 @@ if (!commands[command]) {
 }
 try {
   await commands[command](args);
+  // A grant flow keeps its relay poll pending; leave once stdout is flushed instead of waiting on it.
+  await new Promise((resolve) => process.stdout.write('', resolve));
+  process.exit(0);
 } catch (error) {
   if (error instanceof DriverError) {
     process.stderr.write(`FAIL: ${error.message}\n`);
