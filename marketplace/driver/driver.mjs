@@ -537,6 +537,47 @@ async function expectedAddress(fixture, child) {
   return addresses[0];
 }
 
+// The transaction that pays a purchase, whoever paid it. The headless buyer's `pay` records its txid; a
+// Bitkit buyer pays from the app, so the ledger has none. Match on the purchase's derived address and amount
+// instead: in the mempool first, then in the latest blocks (a confirmed payment is no longer in the mempool).
+const RECENT_BLOCKS = 50;
+
+async function findPaymentTx(purchase, { mempoolOnly = false } = {}) {
+  const pays = (tx) =>
+    tx.vout.some(
+      (output) =>
+        output.scriptPubKey?.address === purchase.derived_address &&
+        Math.round(output.value * 1e8) === purchase.amount_sats,
+    );
+  const found = [];
+  for (const txid of await rpc('getrawmempool')) {
+    // A transaction can leave the mempool between the two calls; skip it then.
+    const tx = await rpc('getrawtransaction', [txid, true]).catch(() => null);
+    if (tx && pays(tx)) found.push({ txid, confirmed: false });
+  }
+  if (!found.length && !mempoolOnly) {
+    const { height } = await chainInfo();
+    for (let at = height; at > Math.max(0, height - RECENT_BLOCKS) && !found.length; at--) {
+      const block = await rpc('getblock', [await rpc('getblockhash', [at]), 2]);
+      for (const tx of block.tx) if (pays(tx)) found.push({ txid: tx.txid, confirmed: true, height: at });
+    }
+  }
+  if (found.length > 1) fail(`more than one transaction pays ${purchase.derived_address}: ${found.map((tx) => tx.txid).join(', ')}`);
+  return found[0] ?? null;
+}
+
+// Remember the payment transaction in the ledger. Returns it, or null when the payment is not on chain yet.
+async function recordPaymentTx(purchases, purchase, options) {
+  const tx = purchase.txid && !options?.mempoolOnly ? { txid: purchase.txid } : await findPaymentTx(purchase, options);
+  if (!tx) return null;
+  if (purchase.txid !== tx.txid) {
+    purchase.txid = tx.txid;
+    if (['created', 'delivered'].includes(purchase.state)) purchase.state = 'paid';
+    await writeJson(PURCHASES_FILE, purchases);
+  }
+  return tx;
+}
+
 async function purchase(args) {
   const sats = Number(flag(args, '--sats') ?? DEFAULT_SATS);
   if (!Number.isInteger(sats) || sats <= 0) fail('--sats must be a positive integer');
@@ -664,6 +705,8 @@ async function pay(args) {
 async function statusCommand(args) {
   const { purchases, purchase } = await findPurchase(args[0]);
   const paykit = await paykitStatus(purchase);
+  // A Bitkit buyer pays from the app, so learn the txid from the chain (non-fatal: nothing to find before payment).
+  if (!purchase.txid) await recordPaymentTx(purchases, purchase).catch((error) => log(`no payment txid yet: ${error.message}`));
   const before = purchase.state;
   if (paykit.status === 'confirmed' && paykit.amount_matched && paykit.confirmations >= 1) purchase.state = 'completed';
   else if (paykit.status === 'detected' && paykit.amount_matched) purchase.state = 'payment_detected';
@@ -687,9 +730,14 @@ async function mine(args) {
   const bundle = flag(args, '--bundle');
   const before = await chainInfo();
   const mempoolBefore = await rpc('getrawmempool');
+  let payment = null;
   if (bundle) {
-    const { purchase } = await findPurchase(bundle);
-    if (!purchase.txid || !mempoolBefore.includes(purchase.txid)) fail('the purchase transaction is not in the mempool');
+    const { purchases, purchase } = await findPurchase(bundle);
+    // The headless buyer's txid is in the ledger; for any other buyer find the payment by address and amount.
+    payment = purchase.txid && mempoolBefore.includes(purchase.txid)
+      ? { txid: purchase.txid }
+      : await recordPaymentTx(purchases, purchase, { mempoolOnly: true });
+    if (!payment) fail('the purchase transaction is not in the mempool');
   }
   const [block] = await mineBlocks(1);
   const after = await chainInfo();
@@ -698,6 +746,7 @@ async function mine(args) {
     mined: 1,
     height: after.height,
     block,
+    ...(payment ? { bundle_id: bundle, txid: payment.txid } : {}),
     mempool_before: mempoolBefore.length,
     mempool_after: (await rpc('getrawmempool')).length,
   });

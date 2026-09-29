@@ -107,6 +107,12 @@ The derived address is the seller xpub's external child `0/<n>`, where `n` is th
 purchases for that seller, checked through `bitcoind deriveaddresses`. A headless `receive` compares it
 with the address in the delivered Payment Request.
 
+`mine --bundle` mines one block only after it finds the purchase transaction in the mempool. The headless buyer's
+`pay` records its txid; for a buyer that pays from an app, `mine --bundle` looks for the transaction that pays
+the derived address the purchase's exact amount, records its txid in the ledger and prints it. `status` does the
+same for a payment that is already confirmed (it searches the last 50 blocks). More than one matching
+transaction is an error, and no match makes `mine --bundle` refuse.
+
 ## Limits
 
 - **Setup relay.** The pinned Paykit Server starts the setup sign-in on `https://httprelay.pubky.app`,

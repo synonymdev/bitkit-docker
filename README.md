@@ -283,7 +283,7 @@ Use this section for the Bitkit marketplace wallet journey (`journeys/pubky-mark
 ./pubky-marketplace receive <bundle>        # headless buyer: Payment Request id, checks lowercase btc and the address
 ./pubky-marketplace pay <bundle>            # headless buyer pays from the regtest wallet
 ./pubky-marketplace wait <bundle> detected  # signed Paykit status: detected
-./pubky-marketplace mine --bundle <bundle>  # exactly one block, refuses if the purchase is not in the mempool
+./pubky-marketplace mine --bundle <bundle>  # exactly one block, refuses if the purchase is not in the mempool (finds an app buyer's payment by address and amount)
 ./pubky-marketplace wait <bundle> confirmed
 ./pubky-marketplace status <bundle>         # signed Paykit status and purchase state (completed at 1 confirmation)
 ```
