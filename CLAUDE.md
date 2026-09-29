@@ -11,6 +11,7 @@ Bitkit Docker is a complete Docker-based development environment for Bitcoin and
 - **Electrum Server** - Electrum protocol server
 - **LNURL Server** - Main web application for LNURL protocols
 - **VSS Server** - Versioned Storage Service for wallet backup
+- **Pubky marketplace fixture** (`marketplace` compose profile) - Pubky testnet, Paykit Server and a purchase driver, run through `./pubky-marketplace`
 
 ## Repository Structure
 
@@ -31,6 +32,8 @@ bitkit-docker/
 │   ├── middleware/         # Express middleware
 │   └── utils/              # Utility functions
 ├── lnd/                    # LND configuration and data
+├── pubky-marketplace       # CLI for the Pubky marketplace fixture (see docs/pubky-marketplace.md)
+├── marketplace/            # Fixture assets: Pubky testnet Dockerfile, homeserver config, driver (Node)
 ├── vss-server/             # VSS server (git submodule)
 └── sql/                    # Database schemas
 ```

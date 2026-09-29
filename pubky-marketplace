@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# Pubky marketplace test fixture for Bitkit's marketplace wallet journey.
+# Docs: docs/pubky-marketplace.md and the "Pubky marketplace fixture" section of README.md.
+
+set -euo pipefail
+
+CLI_NAME="$(basename "$0")"
+cd "$(dirname "$0")"
+
+# Pinned upstream revisions. Paykit Server 722ef268 is v0.1.0-rc4 (pubky/paykit-server master). Its setup
+# flow emits the Pubky grant auth URL (pubkyauth://signin_grant with cid and cpk) that the apps' Paykit SDK
+# (0.1.0-rc55) requires, and still carries x-bitkit-claim=watch-only-account-v1. Earlier revisions such as
+# 867fc883 emit the legacy pubkyauth://signin URL, which the apps reject.
+# Pubky Core is pinned in marketplace/pubky-testnet/Dockerfile.
+PAYKIT_SERVER_REV=722ef26834d8a4fc849de1d883eb296106dd2006
+PAYKIT_RS_REV=9b56a0eacd6874137370fa79ec0f40b809140809   # v0.1.0-rc48, paykit-server's paykit-lib and paykit-sdk pin
+LOCKS_REV=8502ef79c443c640976a2a901b80c5e717319149       # v0.1.0-rc1, paykit-server's locks-core pin
+
+SOURCES=.marketplace/sources
+PAYKIT_PORT="${MARKETPLACE_PAYKIT_PORT:-3001}"
+COMPOSE=(docker compose --profile marketplace)
+CHAIN_SERVICES=(bitcoind bitcoinsetup electrs)
+FIXTURE_SERVICES=(marketplace-postgres pubky-testnet paykit-server)
+
+show_help() {
+  cat <<EOF
+Pubky marketplace fixture: Pubky testnet, Paykit Server 722ef268, regtest chain and a purchase driver.
+Usage: ${CLI_NAME} <command> [options]
+Stack:
+    build                              Fetch the pinned sources and build the images
+    up                                 Build if needed, start the chain and the fixture, wait until ready
+    ps                                 Show the fixture containers and Paykit Server readiness
+    logs [service]                     Follow the fixture logs
+    down                               Remove the fixture containers and state (the chain stays)
+    reset                              down, then up: a fresh testnet, Paykit database and seller
+Fixture:
+    seed [--buyer headless|none]       Mine to maturity, create the seller wallet and identity, complete the
+                                       watch-only setup, optionally create a headless buyer
+    info                               Public fixture facts: homeserver key, seller, buyer, ports
+    setup-url [--serial <adb-serial>]  New watch-only setup auth URL for a Bitkit wallet to approve; --serial
+                                       adds -s <serial> to the printed adb command (needed with several devices)
+    setup-wait <flow>                  Wait until an approved setup flow completes; with a Bitkit seller
+                                       recorded, check the same wallet approved it
+    seller-auth [--relay <url>] [--timeout <seconds>] [--serial <adb-serial>]
+                                       Bitkit seller: print the marketplace write grant (/pub/locks.app/) for the
+                                       seller wallet to approve, with the Android and iOS handoff, wait for it
+                                       and keep the grant session for purchase --seller bitkit. Prints one JSON
+                                       object per line: awaiting_approval first, approved last
+    fund <address> [sats]              Send regtest coins (default 1000000 sats) and mine one block
+    peers [--seller headless|bitkit|<pubky>] [--buyer <pubky>] [--bundle <id>] [--wait <seconds>]
+                                       Report the seller and buyer as linked peers: receiver markers, setup
+                                       authority and Paykit Server's link state (linked is true once connected)
+Purchase:
+    purchase [--sats N] [--buyer headless|<pubky>] [--seller headless|bitkit|<pubky>]
+                                       Create one purchase; print bundle id, address and delivery state. A Bitkit
+                                       seller (after seller-auth and setup) is paid at its wallet's derived address
+    receive <bundle>                   Headless buyer: receive the Payment Request and validate it
+    pay <bundle>                       Headless buyer: pay the derived address from the regtest wallet
+    status <bundle>                    Signed Paykit status and purchase state
+    mine [--bundle <id>] [--address <bcrt1...>]
+                                       Mine exactly one block; print height, hash and the purchase transaction.
+                                       --address names the payout address of a Bitkit seller's purchase
+    wait <bundle> <detected|confirmed> [seconds]
+                                       Wait for a signed Paykit status
+    verify                             Whole headless journey with assertions; writes .marketplace/evidence/
+    verify-bitkit-seller               Bitkit seller path with a headless stand-in for the wallet (both approvals,
+                                       purchase, payout to the stand-in xpub address); writes .marketplace/evidence/
+EOF
+}
+
+compose() { "${COMPOSE[@]}" "$@"; }
+
+# Progress goes to stderr, so stdout stays the command's own output.
+progress() { echo "[${CLI_NAME}] $*" >&2; }
+
+# The driver image takes the helper binaries from the paykit-server image through `additional_contexts:
+# paykit: service:paykit-server`, so every compose command that may build or run the driver prepares the
+# paykit-server build context, and compose stops when .marketplace/sources is missing, even with all the images
+# present (a fresh clone on a host that built before). Fetch the pinned trees whenever one is missing. This is
+# quiet and offline when they are there; keeping the driver's link to that context stays the simpler wiring than
+# feeding it the helpers by another route, which would tie the driver image to an image name.
+ensure_sources() {
+  if [ ! -f "$SOURCES/paykit-server/Dockerfile.local" ] || [ ! -d "$SOURCES/paykit-rs/paykit-lib" ] ||
+    [ ! -d "$SOURCES/paykit-rs/paykit-sdk" ] || [ ! -d "$SOURCES/locks" ]; then
+    progress "fetching the pinned sources under $SOURCES"
+    fetch_sources >&2
+  fi
+}
+
+# The driver runs as root inside its container (it owns the root-only state volume). It hands the files it
+# writes to the host mounts (.marketplace/evidence) to the calling user, so the host can remove them later.
+driver() {
+  ensure_sources
+  mkdir -p .marketplace/evidence
+  compose run --rm --no-deps --quiet-build -T \
+    -e MARKETPLACE_HOST_UID="$(id -u)" -e MARKETPLACE_HOST_GID="$(id -g)" marketplace-driver "$@"
+}
+
+# Older runs left root-owned evidence that the host user cannot delete. Empty it through the driver image
+# (root in the container), then remove the directory itself.
+remove_evidence() {
+  [ -e .marketplace/evidence ] || return 0
+  if ! rm -rf .marketplace/evidence 2>/dev/null; then
+    docker run --rm -v "$PWD/.marketplace:/host" --entrypoint find bitkit-docker/marketplace-driver:local \
+      /host/evidence -mindepth 1 -delete
+    rm -rf .marketplace/evidence
+  fi
+}
+
+project_name() { docker compose config --format json | jq -r '.name'; }
+
+fetch_pinned() {
+  local url="$1" dir="$2" rev="$3"
+  if [ ! -d "$dir/.git" ]; then
+    mkdir -p "$dir"
+    git -C "$dir" init -q
+    git -C "$dir" remote add origin "$url"
+  fi
+  if [ "$(git -C "$dir" rev-parse -q --verify HEAD 2>/dev/null || true)" != "$rev" ]; then
+    git -C "$dir" fetch -q --depth 1 origin "$rev"
+    git -C "$dir" checkout -q --detach FETCH_HEAD
+  fi
+  if [ "$(git -C "$dir" rev-parse HEAD)" != "$rev" ]; then
+    echo "$dir is not at $rev" >&2
+    exit 1
+  fi
+  echo "pinned $dir @ ${rev:0:8}"
+}
+
+# The paykit-server tree resolves paykit-rs and locks by tag through its Cargo.lock, and its Dockerfile.local
+# swaps those for the checkouts below. Fail here, before a long build, if a tag does not resolve to our pins.
+check_lock_pins() {
+  local lock="$SOURCES/paykit-server/Cargo.lock"
+  if ! grep -Fq "source = \"git+https://github.com/pubky/paykit-rs.git?tag=v0.1.0-rc48#$PAYKIT_RS_REV\"" "$lock" ||
+    ! grep -Fq "source = \"git+https://github.com/pubky/locks.git?tag=v0.1.0-rc1#$LOCKS_REV\"" "$lock"; then
+    echo "$lock does not lock paykit-rs $PAYKIT_RS_REV and locks $LOCKS_REV" >&2
+    exit 1
+  fi
+}
+
+fetch_sources() {
+  fetch_pinned https://github.com/pubky/paykit-server.git "$SOURCES/paykit-server" "$PAYKIT_SERVER_REV"
+  fetch_pinned https://github.com/pubky/paykit-rs.git "$SOURCES/paykit-rs" "$PAYKIT_RS_REV"
+  fetch_pinned https://github.com/pubky/locks.git "$SOURCES/locks" "$LOCKS_REV"
+  check_lock_pins
+}
+
+build() {
+  fetch_sources
+  compose build pubky-testnet paykit-server
+  compose build marketplace-driver
+}
+
+images_present() {
+  docker image inspect bitkit-docker/pubky-testnet:f68014c1 bitkit-docker/paykit-server:722ef268 \
+    bitkit-docker/marketplace-driver:local >/dev/null 2>&1
+}
+
+wait_ready() {
+  local deadline=$(($(date +%s) + ${1:-300}))
+  until [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PAYKIT_PORT}/health/ready" || true)" = "200" ]; do
+    if [ "$(date +%s)" -gt "$deadline" ]; then
+      echo "Paykit Server did not become ready; see: ${CLI_NAME} logs paykit-server" >&2
+      exit 1
+    fi
+    sleep 2
+  done
+  curl -fsS "http://127.0.0.1:${PAYKIT_PORT}/health/ready"
+  echo
+}
+
+up() {
+  mkdir -p .marketplace/evidence
+  ensure_sources
+  if ! images_present; then
+    progress "building the images"
+    build
+  fi
+  progress "starting the chain, Postgres and the Pubky testnet"
+  compose up -d "${CHAIN_SERVICES[@]}" marketplace-postgres pubky-testnet
+  progress "initializing the driver state"
+  driver init
+  progress "starting Paykit Server"
+  compose up -d paykit-server
+  progress "waiting for Paykit Server to be ready"
+  wait_ready
+  echo "Electrum: tcp://127.0.0.1:60001"
+  echo "Next: ${CLI_NAME} seed"
+}
+
+# The Pubky testnet keeps its homeserver files and DHT in memory, so it cannot
+# restart with its accounts intact. The fixture is disposable as a whole.
+down() {
+  local project
+  project="$(project_name)"
+  progress "removing the fixture containers"
+  compose rm -sfv "${FIXTURE_SERVICES[@]}" marketplace-driver
+  progress "removing the Postgres and state volumes"
+  docker volume rm -f "${project}_marketplace_postgres_data" "${project}_marketplace_state" >/dev/null
+  progress "removing the evidence"
+  remove_evidence
+}
+
+if [ $# -eq 0 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+  show_help
+  exit 0
+fi
+
+command="$1"
+shift
+
+# Without buildx, compose falls back to the classic builder but says so on every run. That line lands on stderr
+# and breaks `2>&1 | jq`. Set COMPOSE_BAKE yourself to keep it as it is.
+if [ -z "${COMPOSE_BAKE+x}" ] && ! docker buildx version >/dev/null 2>&1; then
+  export COMPOSE_BAKE=false
+fi
+
+case "$command" in
+  build) build ;;
+  up) up ;;
+  ps)
+    compose ps "${CHAIN_SERVICES[@]}" "${FIXTURE_SERVICES[@]}" || true
+    curl -s "http://127.0.0.1:${PAYKIT_PORT}/health/ready" || echo "Paykit Server: not reachable"
+    echo
+    ;;
+  logs) compose logs -f --tail 100 "${@:-paykit-server}" ;;
+  down) down ;;
+  reset)
+    progress "reset: down, then up (a first build or a slow host takes minutes)"
+    down
+    up
+    progress "reset: done; seed next"
+    ;;
+  seed | info | setup-url | setup-wait | seller-auth | fund | peers | purchase | receive | pay | status | mine | wait | verify | verify-bitkit-seller)
+    driver "$command" "$@"
+    ;;
+  *)
+    echo "Unknown command: $command" >&2
+    show_help >&2
+    exit 1
+    ;;
+esac
