@@ -13,7 +13,7 @@ and [bitkit-android#1338](https://github.com/synonymdev/bitkit-android/pull/1338
 | Pubky Core static testnet: DHT, PKARR relay, HTTP relay, one homeserver with open signup | `pubky-testnet`, built from `marketplace/pubky-testnet/Dockerfile` | pubky-core `f68014c1` |
 | Homeserver and Paykit databases | `marketplace-postgres` | `postgres:16-alpine` |
 | Paykit Server | `paykit-server`, built from source with the upstream `Dockerfile.local` | pubky/paykit-server `722ef268` (v0.1.0-rc4), paykit-rs `9b56a0ea` (v0.1.0-rc48), locks-core `8502ef79` (v0.1.0-rc1) |
-| Purchase driver | `marketplace-driver`, run by `./pubky-marketplace` | `marketplace/driver/package-lock.json` |
+| Purchase driver | `marketplace-driver`, run by `./pubky-marketplace` | `marketplace/driver/package-lock.json`, `@synonymdev/pubky` 0.10.0 |
 
 `./pubky-marketplace build` checks the pinned trees out under `.marketplace/sources` (git ignored) and
 fails if a checkout is not at its pin or if the Paykit Server tree's `Cargo.lock` does not lock paykit-rs
@@ -33,6 +33,16 @@ the J1 device run on 2026-09-29 already delivered requests from a paykit-rs rc43
 driver's `setup-url` refuses any auth URL that is not `signin_grant` with `cid` and `cpk`, so a wrong pin
 fails before it reaches a wallet. Unmerged Paykit Server branches move to paykit-rs rc56; they are not
 pinned here.
+
+### Why `@synonymdev/pubky` 0.10.0
+
+Both the Bitkit seller approval and the headless seller need the grant auth flow, which the driver's earlier
+0.9.3 client lacks (it has cookie auth only). The pinned homeserver, Pubky Core `f68014c1` (2026-07-31), sits
+between v0.9.3 and v0.10.0 (2026-08-05); the commits between it and v0.10.0 are documentation, callback
+parameters and one error-surfacing change. 0.10.0 is therefore the client that matches the homeserver. 0.11.0 and
+later upgrade pkarr to v8 and the relay to v2 past that homeserver and are not used until the testnet pin moves.
+In 0.10.0 a signin names its client and returns a grant session, so the headless seller signs in as
+`marketplace.fixture`.
 
 ## Ports
 
@@ -57,14 +67,17 @@ The journey needs a seller, a buyer and a marketplace. The driver can play each 
 wallets replace the wallet roles in the app journey.
 
 - **Marketplace (always the driver).** It publishes a `paykit-payment` content lock on the seller's
-  homeserver and posts a signed `POST /invoices` to Paykit Server as the trusted issuer. The issuer key
+  homeserver, with the seller's own session (headless seller) or with the write grant the Bitkit seller approved
+  (see "Bitkit seller"), and posts a signed `POST /invoices` to Paykit Server as the trusted issuer. The issuer key
   is generated at `init`, and its public key is `locks.trusted_public_key` in the generated Paykit
   config. Paykit Server's status route is signed the same way. This is the part Locks plays in a full
   marketplace; Locks itself is not in this stack.
-- **Seller (headless).** The driver holds the seller's Pubky identity, publishes the lock with it, and
+- **Seller (headless, the default).** The driver holds the seller's Pubky identity, publishes the lock with it, and
   completes `/setup` through `paykit-companion-auth`, which approves the same
   `watch-only-account-v1` claim Bitkit approves. The seller's spending authority is a wallet seed that
-  stays in the state volume; Paykit Server receives only the account xpub at `m/84'/1'/0'`.
+  stays in the state volume; Paykit Server receives only the account xpub at `m/84'/1'/0'`. `verify` uses it.
+- **Seller (Bitkit).** A Bitkit wallet is the seller through two approvals; the driver holds no key or seed for
+  it. See "Bitkit seller".
 - **Buyer (headless or Bitkit).** The headless buyer is `paykit-reader-demo` at the `bitkit/wallet`
   receiver path, paying from the regtest wallet. A Bitkit buyer is passed as `purchase --buyer <pubky>`.
 
@@ -77,7 +90,8 @@ Everything lives in the `marketplace_state` volume, and `down` deletes it.
 
 - `/state/paykit` (readable by the Paykit Server process): generated config and master key.
 - `/state/secrets` (root, mode 0700, unreadable by Paykit Server): issuer seed, seller identity seed,
-  seller wallet seed, buyer identity seed.
+  seller wallet seed, buyer identity seed, and `bitkit-seller.session`, the `/pub/locks.app/` grant session a
+  Bitkit seller approved (bearer-equivalent for that path; the grant lasts two years).
 - `/state/fixture.json`, `/state/purchases.json`: public facts and the purchase ledger.
 - `.marketplace/evidence/<run>/summary.json`: `verify` output, owned by the user who ran the wrapper (the driver
   hands it over from its root container). It holds public keys, bundle and request ids, addresses, txids and
@@ -85,6 +99,53 @@ Everything lives in the `marketplace_state` volume, and `down` deletes it.
 
 The driver never prints a seed or key. `setup-url` prints a one-time auth URL that contains a session
 secret; it is meant to be pasted into a wallet, so keep it out of logs and evidence.
+
+## Bitkit seller
+
+In the wallet journey the Bitkit seller wallet is the seller: the marketplace acts for the identity that wallet
+approves, and payouts land in the wallet. That takes two approvals of the same Pubky identity, in either order:
+
+| Approval | Fixture command | Requester ID | Permissions | Gives the fixture |
+| --- | --- | --- | --- | --- |
+| Paykit setup (`x-bitkit-claim=watch-only-account-v1`) | `setup-url`, then `setup-wait <flow>` | `app.paykit.server` | `/pub/paykit/v0/bitkit/server` and `/pub/paykit/v0/private/bitkit/server`, READ, WRITE | Paykit Server holds the wallet's account xpub and derives the payout addresses |
+| Marketplace grant | `seller-auth` | `locks.app` | `/pub/locks.app`, READ, WRITE | a session that writes the payment lock to the seller's homeserver |
+
+One approval cannot carry both. Both apps accept the watch-only claim only when the requested capabilities are
+exactly the two Paykit paths (a claim with other capabilities, or those two paths without a claim, is
+rejected), and Paykit Server fixes those capabilities. An approval without the claim is an ordinary Pubky
+grant request: both apps accept any capabilities and requester ID for it and show them for the user to
+approve, so the marketplace grant needs no app change.
+
+`seller-auth` starts a grant flow (`startGrantAuthFlow` with `/pub/locks.app/:rw`, client id `locks.app`) on the
+testnet's HTTP relay, prints the `pubkyauth://signin_grant?caps&relay&secret&cid&cpk` URL, waits up to
+`--timeout` seconds (default 300; the relay keeps a request about five minutes) and stores the approved
+session under `/state/secrets`. It records the approving identity as the Bitkit seller and reports Paykit's
+setup state for it. `setup-wait` then checks the wallet that approved the setup is the same identity, and
+`purchase --seller bitkit` (or `--seller <approved pubky>`) refuses until it is. `peers --seller bitkit`,
+`status`, `wait` and `mine --bundle` work on the purchase's own seller.
+
+Handoff. Android opens either URL with `adb shell am start -a android.intent.action.VIEW -d '<auth_url>'`
+(the app enables its `pubkyauth://signin_grant` handler while it holds a Bitkit-generated Pubky identity).
+iOS registers no `pubkyauth` scheme. Its `bitkit://pubky-auth/setup?<query>` handoff requires the claim, so it
+opens only the setup request (`ios_url`). The marketplace grant is entered in the app: Scan QR Code, then Paste
+QR Code with the URL on the simulator clipboard, or Enter QRCode String in E2E builds. An optional iOS app
+change, accepting a claim-less `bitkit://pubky-auth/...` handoff, would let `xcrun simctl openurl` open it
+without taps; it is not needed.
+
+What is verified for the payout, and what is not. Paykit Server exposes no xpub, derived address or txid to
+its creators, so for a Bitkit seller the fixture cannot derive the expected address:
+
+- verified by the fixture: the Payment Request address a headless buyer receives (`receive`) is a regtest
+  native SegWit address; the mempool holds a transaction paying exactly that address and the purchase amount
+  (`pay`, `mine --bundle`; for an app buyer the address comes from `mine --address` or from the one p2wpkh
+  output of exactly the amount); Paykit Server's signed status goes `detected` and then `confirmed` with a
+  matching amount and one confirmation, which means its own derived address for the invoice received the
+  payment; the purchase reaches `completed`.
+- verified only in the seller app: that the address is derived from the wallet's own xpub. The seller wallet
+  tracks its watch-only account, so its balance rises by the amount and the received activity carries the
+  purchase transaction id.
+- verified for a stand-in only: `verify-bitkit-seller` approves both requests with a headless client that owns
+  the xpub, and asserts the Payment Request address and the paid output equal the stand-in's `0/0` child.
 
 ## Lifecycle
 
@@ -105,7 +166,9 @@ more confirmations, the gate Locks applies with `minimum_confirmations = 1`.
 
 The derived address is the seller xpub's external child `0/<n>`, where `n` is the number of earlier
 purchases for that seller, checked through `bitcoind deriveaddresses`. A headless `receive` compares it
-with the address in the delivered Payment Request.
+with the address in the delivered Payment Request. A Bitkit seller's xpub is not in the fixture, so its
+purchases have `derived_address` null and a `payout_address` learned from the Payment Request, `mine --address`
+or the transaction that pays the exact amount (`payout_address_source` says which).
 
 `mine --bundle` mines one block only after it finds the purchase transaction in the mempool. The headless buyer's
 `pay` records its txid; for a buyer that pays from an app, `mine --bundle` looks for the transaction that pays
@@ -132,17 +195,19 @@ use `ready_for_purchase` there and `peers --wait 60` after `purchase`, which exi
 ## Limits
 
 - **Setup relay.** The pinned Paykit Server starts the setup sign-in on `https://httprelay.pubky.app`,
-  not on the local relay, and offers no config to change it. `seed` and a Bitkit seller's approval
-  therefore need outbound internet. Only that one-time handshake leaves the machine.
-- **Seller in the app.** Publishing a lock needs the seller's identity secret, so driver purchases use
-  the headless seller. A Bitkit wallet that approves `setup-url` becomes another Paykit Server creator
-  for the watch-only leg, and the driver does not sell as it. Full Locks legacy-connect authority for a
-  Bitkit seller is out of scope here.
+  not on the local relay, and offers no config to change it. `seed` and a Bitkit seller's setup approval
+  therefore need outbound internet. Only that one-time handshake leaves the machine: the marketplace grant
+  of a Bitkit seller uses the local relay unless `seller-auth --relay` names another.
+- **Locks authority.** A Bitkit seller gives the driver only a write grant on `/pub/locks.app/`, the path Locks
+  publishes locks under, through the Pubky grant session path. Locks' own connect flow and its other seller
+  APIs are out of scope.
 - **No Locks server, no guarded content.** The lock has no guarded resource, and the fixture does not
   cover marketplace browsing, content delivery, fiat payment or Hypercolor, which the journey also
   excludes.
 - **Bitkit apps.** The commands for Bitkit wallets follow the journey's fixture contract. The buyer legs
   ran on both apps in the J1 device run on 2026-09-29, against the previous Paykit Server pin. The seller
-  setup with the current pin has been run headlessly (`seed` and `verify`) and not yet against an app.
+  setup with the current pin has been run headlessly (`seed` and `verify`) and not yet against an app. The
+  Bitkit seller path (`seller-auth`, `purchase --seller bitkit`) has a headless self-test,
+  `verify-bitkit-seller`, and has not been run against an app yet.
 - **Fixed container names.** The base services keep their fixed container names, so another checkout's
   stack with the same names must be removed first.

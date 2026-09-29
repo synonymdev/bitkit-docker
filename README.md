@@ -313,7 +313,24 @@ Then, with the buyer wallet:
 ./pubky-marketplace peers --buyer <buyer pubky> --wait 60  # after the purchase: Paykit Server's link to the buyer is connected
 ```
 
-Pay the request in the app, then confirm with `./pubky-marketplace mine --bundle <bundle>`, `./pubky-marketplace wait <bundle> confirmed` and `./pubky-marketplace status <bundle>`. The seller in a driver purchase is the fixture's headless seller, because publishing the payment lock needs the seller's identity secret. To check only the watch-only claim in a Bitkit seller wallet, run `./pubky-marketplace setup-url`, open the printed `auth_url` in that wallet (the URL holds a one-time secret, so keep it out of logs and evidence), approve it, then `./pubky-marketplace setup-wait <flow>`. The URL is a `pubkyauth://signin_grant?...` link. On Android open it with `adb shell am start -a android.intent.action.VIEW -d '<auth_url>'`; iOS has no `pubkyauth` handler, so open the printed `ios_url` (`bitkit://pubky-auth/setup?<query>`) with `xcrun simctl openurl <simulator-id> '<ios_url>'`.
+Pay the request in the app, then confirm with `./pubky-marketplace mine --bundle <bundle>`, `./pubky-marketplace wait <bundle> confirmed` and `./pubky-marketplace status <bundle>`. By default the seller of a purchase is the fixture's headless seller, and `verify` always uses it.
+
+To make a Bitkit wallet the seller, the wallet approves two Pubky requests for the same identity: the Paykit watch-only setup (it gives Paykit Server the wallet's account xpub, so payouts land in that wallet) and a write grant on `/pub/locks.app/` (the role Locks plays: the driver publishes the payment lock with the granted session). One request cannot carry both, because the apps accept the watch-only claim only for exactly the two Paykit paths.
+
+```bash
+./pubky-marketplace seed --buyer none            # once per fixture; the headless seller stays unused
+./pubky-marketplace setup-url                    # open android or ios_url in the seller wallet, approve, then:
+./pubky-marketplace setup-wait <flow>
+./pubky-marketplace seller-auth                  # prints the marketplace grant request, waits for the approval
+./pubky-marketplace purchase --seller bitkit --buyer <buyer pubky>
+./pubky-marketplace mine --bundle <bundle>       # after the buyer pays; add --address <bcrt1...> if two payments match the amount
+./pubky-marketplace wait <bundle> confirmed
+./pubky-marketplace status <bundle>              # payout address, txid, signed Paykit status, purchase state
+```
+
+Both URLs are `pubkyauth://signin_grant?...` links whose one-time secret must stay out of logs and evidence. On Android open each printed `android` command (`adb shell am start -a android.intent.action.VIEW -d '<auth_url>'`). On iOS the setup request opens through the printed `ios_url` (`xcrun simctl openurl <simulator-id> '<ios_url>'`); the marketplace grant has no iOS deep link, so put its `auth_url` on the simulator clipboard (`printf %s '<auth_url>' | xcrun simctl pbcopy <simulator-id>`) and use Scan QR Code, then Paste QR Code (E2E builds also have Enter QRCode String). The marketplace request goes through the testnet's HTTP relay on `localhost:15412` (published by the fixture; on Android it is one of the `adb reverse` ports above) and expires after about five minutes; pass `--relay https://httprelay.pubky.app/inbox/` to use the public relay instead. The setup request still uses the public relay and needs outbound internet.
+
+The fixture cannot check a Bitkit seller's payout address against the wallet's xpub, because Paykit Server keeps the xpub and the derived address to itself. It checks that the Payment Request address is a regtest native SegWit address, that exactly the amount is paid to it on chain, and Paykit Server's signed status (`detected`, then `confirmed` with a matching amount). That the address belongs to the wallet shows in the seller app: its balance rises by the amount and the received activity carries the same txid as `status`. `./pubky-marketplace verify-bitkit-seller` runs the whole path with a headless stand-in for the wallet and does check the payout against the stand-in's xpub.
 
 Remove the fixture with `./pubky-marketplace down`, or start over with `./pubky-marketplace reset`. The Pubky testnet keeps its accounts in memory, so the fixture cannot restart with its state and `down` deletes it (the regtest chain stays). `./pubky-marketplace --help` lists every command. See [docs/pubky-marketplace.md](docs/pubky-marketplace.md) for the pins, ports, roles and what the fixture does not cover.
 
