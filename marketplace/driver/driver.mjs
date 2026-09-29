@@ -769,6 +769,95 @@ async function waitFor(args) {
   }
 }
 
+// Linked-peer report for journey step 14: "the fixture reports the seller and buyer as linked peers".
+// It reads what the fixture can see: each side's public Paykit receiver marker, the seller's setup
+// authority, and Paykit Server's persisted peer state for a purchase's reader binding.
+async function receiverMarker(pubky, receiverPath) {
+  const path = `/pub/paykit/v0/${receiverPath}/receiver.json`;
+  const storage = pubkyClient().publicStorage;
+  if (!(await storage.exists(`${pubky}${path}`))) return { path, present: false };
+  return { path, present: true, marker: await storage.getJson(`${pubky}${path}`) };
+}
+
+async function peerReport({ fixture, purchases, buyerArg, bundleArg }) {
+  const reader = buyerArg ?? (bundleArg ? undefined : purchases.at(-1)?.reader) ?? fixture.buyer?.pubky;
+  if (!reader) fail('no buyer; pass --buyer <pubky> or run: ./pubky-marketplace seed --buyer headless');
+  const purchase = bundleArg
+    ? purchases.find((entry) => entry.bundle_id === bundleArg)
+    : purchases.filter((entry) => entry.reader === reader).at(-1);
+  if (bundleArg && !purchase) fail(`unknown bundle ${bundleArg}`);
+  const headless = fixture.buyer?.pubky === reader;
+
+  const setup = await signedPost('/setup/status', { creator: fixture.seller.pubky });
+  let serverSide = 'no_purchase_yet';
+  if (purchase) {
+    const state = await signedPost('/connections/status', { creator: fixture.seller.pubky, bundle_id: purchase.bundle_id });
+    serverSide = state.status === 200 ? state.json.state : `unavailable_http_${state.status}`;
+  }
+  let buyerSide = null;
+  if (headless) {
+    const inspected = await runHelper(
+      'paykit-reader-demo',
+      { version: 1, operation: 'inspect', reader_secret: await readSecret('buyer-identity.seed') },
+      readerEnv(fixture.seller.pubky),
+    );
+    buyerSide = inspected.code === 0 ? JSON.parse(inspected.stdout).connection_state : 'unavailable';
+  }
+  const sellerMarker = await receiverMarker(fixture.seller.pubky, SERVER_PATH);
+  const buyerMarker = await receiverMarker(reader, BUYER_PATH);
+  const sellerReady = setup.status === 200 && setup.json?.status === 'ready' && sellerMarker.present;
+  return {
+    seller: {
+      pubky: fixture.seller.pubky,
+      kind: fixture.seller.kind,
+      receiver_path: SERVER_PATH,
+      setup: setup.status === 200 ? setup.json.status : `unavailable_http_${setup.status}`,
+      receiver_marker: sellerMarker,
+    },
+    buyer: {
+      pubky: reader,
+      kind: headless ? 'headless' : 'external',
+      receiver_path: BUYER_PATH,
+      receiver_marker: buyerMarker,
+    },
+    link: {
+      bundle_id: purchase?.bundle_id ?? null,
+      // Paykit Server's view of its link to the buyer: none, handshake, connected, recovery_required or blocked.
+      // The server keeps it per purchase, so before the first purchase for this buyer it reads no_purchase_yet.
+      server_side: serverSide,
+      // The headless buyer's own view of its link to the server; a Bitkit buyer shows this in the app.
+      buyer_side: buyerSide,
+    },
+    // Both identities publish their receiver markers and the seller's setup authority is usable: a purchase can be delivered.
+    ready_for_purchase: sellerReady && buyerMarker.present,
+    // Paykit Server holds a live link to the buyer.
+    linked: sellerReady && buyerMarker.present && serverSide === 'connected',
+  };
+}
+
+async function peers(args) {
+  const fixture = await readFixture();
+  const purchases = await readJson(PURCHASES_FILE, []);
+  const waitSeconds = Number(flag(args, '--wait') ?? 0);
+  if (!Number.isFinite(waitSeconds) || waitSeconds < 0) fail('usage: peers [--buyer <pubky>] [--bundle <id>] [--wait <seconds>]');
+  await waitForPaykit();
+  const deadline = Date.now() + waitSeconds * 1000;
+  for (;;) {
+    const report = await peerReport({
+      fixture,
+      purchases: await readJson(PURCHASES_FILE, purchases),
+      buyerArg: flag(args, '--buyer'),
+      bundleArg: flag(args, '--bundle'),
+    });
+    if (report.linked || !waitSeconds || Date.now() > deadline) {
+      out(report);
+      if (waitSeconds && !report.linked) fail(`seller and buyer are not linked after ${waitSeconds}s`);
+      return;
+    }
+    await sleep(2000);
+  }
+}
+
 // The whole journey with the driver in every wallet role. Each step asserts.
 async function verify() {
   const evidence = { started_at: new Date().toISOString(), steps: {} };
@@ -848,6 +937,7 @@ const commands = {
   pay,
   status: statusCommand,
   mine,
+  peers,
   wait: waitFor,
   verify: () => verify(),
 };

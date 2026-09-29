@@ -299,7 +299,9 @@ Then, with the buyer wallet:
 ```bash
 ./pubky-marketplace info | jq -r .seller.pubky        # save this seller as a contact in the buyer wallet
 ./pubky-marketplace fund <buyer bcrt1 address> 1000000  # sends coins and mines one funding block
+./pubky-marketplace peers --buyer <buyer pubky>      # journey step 14: seller setup ready, both receiver markers published
 ./pubky-marketplace purchase --buyer <buyer pubky>    # the Payment Request appears in the buyer wallet
+./pubky-marketplace peers --buyer <buyer pubky> --wait 60  # after the purchase: Paykit Server's link to the buyer is connected
 ```
 
 Pay the request in the app, then confirm with `./pubky-marketplace mine --bundle <bundle>`, `./pubky-marketplace wait <bundle> confirmed` and `./pubky-marketplace status <bundle>`. The seller in a driver purchase is the fixture's headless seller, because publishing the payment lock needs the seller's identity secret. To check only the watch-only claim in a Bitkit seller wallet, run `./pubky-marketplace setup-url`, open the printed `auth_url` in that wallet (the URL holds a one-time secret, so keep it out of logs and evidence), approve it, then `./pubky-marketplace setup-wait <flow>`. The URL is a `pubkyauth://signin_grant?...` link. On Android open it with `adb shell am start -a android.intent.action.VIEW -d '<auth_url>'`; iOS has no `pubkyauth` handler, so open the printed `ios_url` (`bitkit://pubky-auth/setup?<query>`) with `xcrun simctl openurl booted '<ios_url>'`.

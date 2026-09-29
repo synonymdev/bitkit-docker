@@ -40,6 +40,9 @@ Fixture:
     setup-url                          New watch-only setup auth URL for a Bitkit wallet to approve
     setup-wait <flow>                  Wait until an approved setup flow completes
     fund <address> [sats]              Send regtest coins (default 1000000 sats) and mine one block
+    peers [--buyer <pubky>] [--bundle <id>] [--wait <seconds>]
+                                       Report the seller and buyer as linked peers: receiver markers, setup
+                                       authority and Paykit Server's link state (linked is true once connected)
 Purchase:
     purchase [--sats N] [--buyer headless|<pubky>]
                                        Create one purchase; print bundle id, address and delivery state
@@ -176,7 +179,7 @@ case "$command" in
     "$0" down
     up
     ;;
-  seed | info | setup-url | setup-wait | fund | purchase | receive | pay | status | mine | wait | verify)
+  seed | info | setup-url | setup-wait | fund | peers | purchase | receive | pay | status | mine | wait | verify)
     driver "$command" "$@"
     ;;
   *)

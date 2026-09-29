@@ -113,6 +113,22 @@ the derived address the purchase's exact amount, records its txid in the ledger 
 same for a payment that is already confirmed (it searches the last 50 blocks). More than one matching
 transaction is an error, and no match makes `mine --bundle` refuse.
 
+## Linked peers
+
+`peers [--buyer <pubky>] [--bundle <id>] [--wait <seconds>]` is the fixture's answer to journey step 14. It
+prints, for the seller and for the buyer (default: the latest purchase's buyer, else the headless buyer):
+
+- the public Paykit receiver marker each identity publishes (`bitkit/server` for the seller, `bitkit/wallet` for
+  the buyer), which shows contact payments are on;
+- the seller's Paykit Server setup authority (`ready`, `setup_required` or `unavailable`);
+- Paykit Server's persisted link state to the buyer for the purchase's reader binding (`none`, `handshake`,
+  `connected`, `recovery_required` or `blocked`), and for the headless buyer its own view of the link.
+
+`ready_for_purchase` is true when both markers are published and the seller's setup is ready. `linked` is true
+only when Paykit Server reports the link `connected`. Paykit Server keeps that state per purchase and exposes no
+per-peer query, so before a buyer's first purchase `server_side` reads `no_purchase_yet` and `linked` is false;
+use `ready_for_purchase` there and `peers --wait 60` after `purchase`, which exits 1 if the link never connects.
+
 ## Limits
 
 - **Setup relay.** The pinned Paykit Server starts the setup sign-in on `https://httprelay.pubky.app`,
