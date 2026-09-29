@@ -37,13 +37,15 @@ Fixture:
     seed [--buyer headless|none]       Mine to maturity, create the seller wallet and identity, complete the
                                        watch-only setup, optionally create a headless buyer
     info                               Public fixture facts: homeserver key, seller, buyer, ports
-    setup-url                          New watch-only setup auth URL for a Bitkit wallet to approve
+    setup-url [--serial <adb-serial>]  New watch-only setup auth URL for a Bitkit wallet to approve; --serial
+                                       adds -s <serial> to the printed adb command (needed with several devices)
     setup-wait <flow>                  Wait until an approved setup flow completes; with a Bitkit seller
                                        recorded, check the same wallet approved it
-    seller-auth [--relay <url>] [--timeout <seconds>]
+    seller-auth [--relay <url>] [--timeout <seconds>] [--serial <adb-serial>]
                                        Bitkit seller: print the marketplace write grant (/pub/locks.app/) for the
                                        seller wallet to approve, with the Android and iOS handoff, wait for it
-                                       and keep the grant session for purchase --seller bitkit
+                                       and keep the grant session for purchase --seller bitkit. Prints one JSON
+                                       object per line: awaiting_approval first, approved last
     fund <address> [sats]              Send regtest coins (default 1000000 sats) and mine one block
     peers [--seller headless|bitkit|<pubky>] [--buyer <pubky>] [--bundle <id>] [--wait <seconds>]
                                        Report the seller and buyer as linked peers: receiver markers, setup
@@ -68,9 +70,27 @@ EOF
 
 compose() { "${COMPOSE[@]}" "$@"; }
 
+# Progress goes to stderr, so stdout stays the command's own output.
+progress() { echo "[${CLI_NAME}] $*" >&2; }
+
+# The driver image takes the helper binaries from the paykit-server image through `additional_contexts:
+# paykit: service:paykit-server`, so every compose command that may build or run the driver prepares the
+# paykit-server build context, and compose stops when .marketplace/sources is missing, even with all the images
+# present (a fresh clone on a host that built before). Fetch the pinned trees whenever one is missing. This is
+# quiet and offline when they are there; keeping the driver's link to that context stays the simpler wiring than
+# feeding it the helpers by another route, which would tie the driver image to an image name.
+ensure_sources() {
+  if [ ! -f "$SOURCES/paykit-server/Dockerfile.local" ] || [ ! -d "$SOURCES/paykit-rs/paykit-lib" ] ||
+    [ ! -d "$SOURCES/paykit-rs/paykit-sdk" ] || [ ! -d "$SOURCES/locks" ]; then
+    progress "fetching the pinned sources under $SOURCES"
+    fetch_sources >&2
+  fi
+}
+
 # The driver runs as root inside its container (it owns the root-only state volume). It hands the files it
 # writes to the host mounts (.marketplace/evidence) to the calling user, so the host can remove them later.
 driver() {
+  ensure_sources
   mkdir -p .marketplace/evidence
   compose run --rm --no-deps --quiet-build -T \
     -e MARKETPLACE_HOST_UID="$(id -u)" -e MARKETPLACE_HOST_GID="$(id -g)" marketplace-driver "$@"
@@ -151,10 +171,18 @@ wait_ready() {
 
 up() {
   mkdir -p .marketplace/evidence
-  images_present || build
+  ensure_sources
+  if ! images_present; then
+    progress "building the images"
+    build
+  fi
+  progress "starting the chain, Postgres and the Pubky testnet"
   compose up -d "${CHAIN_SERVICES[@]}" marketplace-postgres pubky-testnet
+  progress "initializing the driver state"
   driver init
+  progress "starting Paykit Server"
   compose up -d paykit-server
+  progress "waiting for Paykit Server to be ready"
   wait_ready
   echo "Electrum: tcp://127.0.0.1:60001"
   echo "Next: ${CLI_NAME} seed"
@@ -165,8 +193,11 @@ up() {
 down() {
   local project
   project="$(project_name)"
+  progress "removing the fixture containers"
   compose rm -sfv "${FIXTURE_SERVICES[@]}" marketplace-driver
+  progress "removing the Postgres and state volumes"
   docker volume rm -f "${project}_marketplace_postgres_data" "${project}_marketplace_state" >/dev/null
+  progress "removing the evidence"
   remove_evidence
 }
 
@@ -177,6 +208,12 @@ fi
 
 command="$1"
 shift
+
+# Without buildx, compose falls back to the classic builder but says so on every run. That line lands on stderr
+# and breaks `2>&1 | jq`. Set COMPOSE_BAKE yourself to keep it as it is.
+if [ -z "${COMPOSE_BAKE+x}" ] && ! docker buildx version >/dev/null 2>&1; then
+  export COMPOSE_BAKE=false
+fi
 
 case "$command" in
   build) build ;;
@@ -189,8 +226,10 @@ case "$command" in
   logs) compose logs -f --tail 100 "${@:-paykit-server}" ;;
   down) down ;;
   reset)
+    progress "reset: down, then up (a first build or a slow host takes minutes)"
     down
     up
+    progress "reset: done; seed next"
     ;;
   seed | info | setup-url | setup-wait | seller-auth | fund | peers | purchase | receive | pay | status | mine | wait | verify | verify-bitkit-seller)
     driver "$command" "$@"

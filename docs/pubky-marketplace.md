@@ -124,8 +124,20 @@ setup state for it. `setup-wait` then checks the wallet that approved the setup 
 `purchase --seller bitkit` (or `--seller <approved pubky>`) refuses until it is. `peers --seller bitkit`,
 `status`, `wait` and `mine --bundle` work on the purchase's own seller.
 
-Handoff. Android opens either URL with `adb shell am start -a android.intent.action.VIEW -d '<auth_url>'`
-(the app enables its `pubkyauth://signin_grant` handler while it holds a Bitkit-generated Pubky identity).
+`seller-auth` prints one compact JSON object per line: `awaiting_approval` (with `auth_url`, `android`, `ios`) at
+once, then `approved` when the wallet has approved. Read the request from the first line (`... | head -1 | jq
+-r .auth_url`, or `jq -r 'select(.status == "awaiting_approval") | .auth_url'` over the stream) and collect both
+with `jq -s`. `info` shows the result as `bitkit_seller.marketplace_grant` (`locks.app /pub/locks.app/:rw`)
+and `bitkit_seller.setup_completed_at` (null until `setup-wait` has seen the setup complete), next to
+`bitkit_seller.pubky` and `kind`; `seller.pubky` is the unused headless seller.
+
+Handoff. Android opens either URL with the printed `android` command,
+`adb shell "am start -a android.intent.action.VIEW -d '<auth_url>'"` (the app enables its
+`pubkyauth://signin_grant` handler while it holds a Bitkit-generated Pubky identity). The double quotes around
+the whole device command matter: adb hands its arguments to the device shell as one line, so single quotes
+outside them are lost and the shell cuts the URL at the first `&`, leaving the app only `caps=...`. With more
+than one device or emulator, add `--serial <adb-serial>` to `setup-url` or `seller-auth`
+(`adb devices` lists them) and the printed command becomes `adb -s <adb-serial> shell "..."`.
 iOS registers no `pubkyauth` scheme. Its `bitkit://pubky-auth/setup?<query>` handoff requires the claim, so it
 opens only the setup request (`ios_url`). The marketplace grant is entered in the app: Scan QR Code, then Paste
 QR Code with the URL on the simulator clipboard, or Enter QRCode String in E2E builds. An optional iOS app
@@ -138,7 +150,7 @@ its creators, so for a Bitkit seller the fixture cannot derive the expected addr
 - verified by the fixture: the Payment Request address a headless buyer receives (`receive`) is a regtest
   native SegWit address; the mempool holds a transaction paying exactly that address and the purchase amount
   (`pay`, `mine --bundle`; for an app buyer the address comes from `mine --address` or from the one p2wpkh
-  output of exactly the amount); Paykit Server's signed status goes `detected` and then `confirmed` with a
+  output of exactly the amount, both exercised with an app buyer on Android and iOS); Paykit Server's signed status goes `detected` and then `confirmed` with a
   matching amount and one confirmation, which means its own derived address for the invoice received the
   payment; the purchase reaches `completed`.
 - verified only in the seller app: that the address is derived from the wallet's own xpub. The seller wallet
@@ -155,12 +167,25 @@ whole: `down` removes the fixture containers, its Postgres and its state volume,
 services do not restart on their own. After a crash or a Docker restart, run `./pubky-marketplace
 reset`. The regtest chain from the base stack is left alone.
 
+`up`, `reset` and every driver command fetch the pinned sources under `.marketplace/sources` when a tree is
+missing, even if the images exist: the driver image is wired to the paykit-server build context, and compose
+refuses to run the driver without it (a fresh clone on a host that built before). Nothing is fetched when the
+trees are there.
+
+## Output
+
+Command results are JSON on stdout. Progress lines (`reset`, `up` and `down` announce each phase) and compose's own
+messages go to stderr. On a host without buildx the wrapper sets `COMPOSE_BAKE=false`, so compose does not print
+its "configured to build using Bake, but buildx isn't installed" warning on every run; set `COMPOSE_BAKE` yourself
+to keep your own value. `2>&1 | jq` therefore works there, and `seller-auth` prints one object per line (see above).
+
 ## Purchase states
 
 `purchase` returns once Paykit Server has durably accepted the invoice and reports `delivery`:
 `queued` or `sent` from the server's outbox metrics, or `failed`. The Payment Request id exists only
-in the SDK's delivery, so `receive` (headless buyer) reports it; for a Bitkit buyer read it from the
-request row in the app. The purchase state moves `created`, `delivered`, `paid`, `payment_detected`,
+in the SDK's delivery, so `receive` (headless buyer) reports it. For a Bitkit buyer the delivery goes to the
+app, and neither Paykit Server's API nor the chain hands the id to the fixture, so `status` prints
+`payment_request_id: null`; read the id from the request row in the app. The purchase state moves `created`, `delivered`, `paid`, `payment_detected`,
 `completed`. `completed` means a signed Paykit status of `confirmed` with a matching amount at one or
 more confirmations, the gate Locks applies with `minimum_confirmations = 1`.
 
@@ -168,7 +193,9 @@ The derived address is the seller xpub's external child `0/<n>`, where `n` is th
 purchases for that seller, checked through `bitcoind deriveaddresses`. A headless `receive` compares it
 with the address in the delivered Payment Request. A Bitkit seller's xpub is not in the fixture, so its
 purchases have `derived_address` null and a `payout_address` learned from the Payment Request, `mine --address`
-or the transaction that pays the exact amount (`payout_address_source` says which).
+or the transaction that pays the exact amount (`payout_address_source` says which: `payment_request`, `operator`
+or `amount_match`). With an app buyer both `amount_match` and `mine --bundle` without `--address` have been
+exercised, on Android and on iOS.
 
 `mine --bundle` mines one block only after it finds the purchase transaction in the mempool. The headless buyer's
 `pay` records its txid; for a buyer that pays from an app, `mine --bundle` looks for the transaction that pays
@@ -191,6 +218,10 @@ prints, for the seller and for the buyer (default: the reader of the purchase `-
 only when Paykit Server reports the link `connected`. Paykit Server keeps that state per purchase and exposes no
 per-peer query, so before a buyer's first purchase `server_side` reads `no_purchase_yet` and `linked` is false;
 use `ready_for_purchase` there and `peers --wait 60` after `purchase`, which exits 1 if the link never connects.
+
+`link.buyer_side` is the buyer's own view of the link and only the headless buyer can be asked. For an app buyer
+it reads `not_observable`: the fixture holds no key for the app's end of the link, the app shows that side
+(Linked), and `linked` rests on Paykit Server's side (`server_side: connected`) plus the two receiver markers.
 `verify` and `verify-bitkit-seller` assert both: `ready_for_purchase` before the purchase and `linked` after `receive`.
 
 ## Limits

@@ -58,6 +58,7 @@ const EXPECTED_ENDPOINT = 'btc-regtest-p2wpkh';
 
 const log = (message) => process.stderr.write(`[marketplace] ${message}\n`);
 const out = (value) => process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+const outLine = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const b64url = (bytes) => Buffer.from(bytes).toString('base64url');
 
@@ -420,7 +421,7 @@ async function approveSetupAs(authUrl, identitySeed, xpub, accountIndex) {
   }
 }
 
-async function setupUrl() {
+async function setupUrl(args = []) {
   await waitForPaykit();
   const { flowId, authUrl } = await beginSetup();
   const params = authParams(authUrl);
@@ -429,7 +430,7 @@ async function setupUrl() {
     auth_url: authUrl,
     // Android opens the grant URL directly. iOS has no pubkyauth handler: hand the same query to Bitkit as
     // bitkit://pubky-auth/setup?<query>.
-    android: `adb shell am start -a android.intent.action.VIEW -d '${authUrl}'`,
+    android: androidOpen(authUrl, flag(args, '--serial')),
     ios_url: `bitkit://pubky-auth/setup?${authUrl.slice(authUrl.indexOf('?') + 1)}`,
     client_id: params.get('cid'),
     claim: params.get('x-bitkit-claim'),
@@ -934,7 +935,8 @@ async function peerReport({ fixture, purchases, buyerArg, bundleArg, sellerArg }
     const state = await signedPost('/connections/status', { creator: seller.pubky, bundle_id: purchase.bundle_id });
     serverSide = state.status === 200 ? state.json.state : `unavailable_http_${state.status}`;
   }
-  let buyerSide = null;
+  // An app buyer holds its own end of the link inside the app; the fixture has no key for it and cannot inspect it.
+  let buyerSide = 'not_observable';
   if (headless) {
     const inspected = await runHelper(
       'paykit-reader-demo',
@@ -965,7 +967,8 @@ async function peerReport({ fixture, purchases, buyerArg, bundleArg, sellerArg }
       // Paykit Server's view of its link to the buyer: none, handshake, connected, recovery_required or blocked.
       // The server keeps it per purchase, so before the first purchase for this buyer it reads no_purchase_yet.
       server_side: serverSide,
-      // The headless buyer's own view of its link to the server; a Bitkit buyer shows this in the app.
+      // The headless buyer's own view of its link to the server. For an app buyer it reads not_observable: the app
+      // shows that side (Linked), and `linked` below rests on Paykit Server's side alone.
       buyer_side: buyerSide,
     },
     // Both identities publish their receiver markers and the seller's setup authority is usable: a purchase can be delivered.
@@ -1089,7 +1092,11 @@ async function verify() {
 
 // ---------------------------------------------------------------- Bitkit seller
 
-const androidOpen = (authUrl) => `adb shell am start -a android.intent.action.VIEW -d '${authUrl}'`;
+// adb joins the arguments after `shell` and the device shell splits them again, so a URL in single quotes
+// outside the double quotes loses its quotes and is cut at the first `&`. The whole device command goes in one
+// double-quoted string with the URL single-quoted inside it. With several devices or emulators pass --serial.
+const androidOpen = (authUrl, serial) =>
+  `adb${serial ? ` -s ${serial}` : ''} shell "am start -a android.intent.action.VIEW -d '${authUrl}'"`;
 
 // The marketplace's request for a write grant on the seller's /pub/locks.app/, shown to the seller as a Pubky
 // auth request (the role Locks plays). The flow polls the relay as long as this process runs.
@@ -1149,16 +1156,17 @@ async function adoptBitkitSeller(session, kind) {
 async function sellerAuth(args) {
   const relay = flag(args, '--relay') ?? LOCKS_RELAY;
   const seconds = Number(flag(args, '--timeout') ?? 300);
-  if (!Number.isFinite(seconds) || seconds <= 0) fail('usage: seller-auth [--relay <url>] [--timeout <seconds>]');
+  if (!Number.isFinite(seconds) || seconds <= 0) fail('usage: seller-auth [--relay <url>] [--timeout <seconds>] [--serial <adb-serial>]');
   await readFixture();
   const { flow, authUrl } = await startLocksGrant(relay);
-  out({
+  // One compact JSON object per line: the first line is the request, the last one the approval.
+  outLine({
     status: 'awaiting_approval',
     client_id: LOCKS_CLIENT_ID,
     capabilities: LOCKS_CAPS,
     relay,
     auth_url: authUrl,
-    android: androidOpen(authUrl),
+    android: androidOpen(authUrl, flag(args, '--serial')),
     // iOS registers no pubkyauth handler and bitkit://pubky-auth/setup accepts only the setup request: put
     // auth_url on the simulator's clipboard, then Scan QR Code, Paste QR Code (E2E builds: Enter QRCode String).
     ios: {
@@ -1169,7 +1177,7 @@ async function sellerAuth(args) {
   });
   const session = await awaitGrant(flow, seconds);
   const { seller, paykitSetup } = await adoptBitkitSeller(session, 'bitkit');
-  out({
+  outLine({
     status: 'approved',
     seller: seller.pubky,
     client_id: seller.client_id,
@@ -1260,7 +1268,7 @@ const commands = {
   init: () => init(),
   seed,
   info: async () => out(await publicInfo()),
-  'setup-url': () => setupUrl(),
+  'setup-url': (args) => setupUrl(args),
   'setup-wait': (args) => setupWait(args[0]),
   'seller-auth': sellerAuth,
   fund,
