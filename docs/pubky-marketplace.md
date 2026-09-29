@@ -179,7 +179,7 @@ transaction is an error, and no match makes `mine --bundle` refuse.
 ## Linked peers
 
 `peers [--buyer <pubky>] [--bundle <id>] [--wait <seconds>]` is the fixture's answer to journey step 14. It
-prints, for the seller and for the buyer (default: the latest purchase's buyer, else the headless buyer):
+prints, for the seller and for the buyer (default: the reader of the purchase `--bundle` selects, else the latest purchase's buyer, else the headless buyer):
 
 - the public Paykit receiver marker each identity publishes (`bitkit/server` for the seller, `bitkit/wallet` for
   the buyer), which shows contact payments are on;
@@ -191,6 +191,7 @@ prints, for the seller and for the buyer (default: the latest purchase's buyer, 
 only when Paykit Server reports the link `connected`. Paykit Server keeps that state per purchase and exposes no
 per-peer query, so before a buyer's first purchase `server_side` reads `no_purchase_yet` and `linked` is false;
 use `ready_for_purchase` there and `peers --wait 60` after `purchase`, which exits 1 if the link never connects.
+`verify` and `verify-bitkit-seller` assert both: `ready_for_purchase` before the purchase and `linked` after `receive`.
 
 ## Limits
 

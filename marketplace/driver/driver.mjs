@@ -919,12 +919,12 @@ async function peerReport({ fixture, purchases, buyerArg, bundleArg, sellerArg }
   // The seller is --seller, else the seller of the bundle or latest purchase, else the headless seller.
   const chosen = sellerArg ? pickSeller(fixture, sellerArg) : null;
   const ofSeller = (entry) => !chosen || entry.seller === chosen.pubky;
-  const reader = buyerArg ?? (bundleArg ? undefined : purchases.filter(ofSeller).at(-1)?.reader) ?? fixture.buyer?.pubky;
+  // --bundle selects a purchase, whose reader is the buyer unless --buyer names another one.
+  const bundlePurchase = bundleArg ? purchases.find((entry) => entry.bundle_id === bundleArg) : undefined;
+  if (bundleArg && !bundlePurchase) fail(`unknown bundle ${bundleArg}`);
+  const reader = buyerArg ?? bundlePurchase?.reader ?? purchases.filter(ofSeller).at(-1)?.reader ?? fixture.buyer?.pubky;
   if (!reader) fail('no buyer; pass --buyer <pubky> or run: ./pubky-marketplace seed --buyer headless');
-  const purchase = bundleArg
-    ? purchases.find((entry) => entry.bundle_id === bundleArg)
-    : purchases.filter((entry) => entry.reader === reader && ofSeller(entry)).at(-1);
-  if (bundleArg && !purchase) fail(`unknown bundle ${bundleArg}`);
+  const purchase = bundlePurchase ?? purchases.filter((entry) => entry.reader === reader && ofSeller(entry)).at(-1);
   const seller = chosen ?? sellerOf(fixture, purchase?.seller);
   const headless = fixture.buyer?.pubky === reader;
 
@@ -1033,6 +1033,14 @@ async function writeEvidence(evidence, suffix = '') {
   out(evidence);
 }
 
+// After the buyer received the Payment Request, the bundle's peers must read as linked.
+async function assertLinked(capture, bundle) {
+  const report = await capture('peers_linked', () => peers(['--bundle', bundle, '--wait', '30']));
+  if (!report.linked || report.link.bundle_id !== bundle || report.link.server_side !== 'connected') {
+    fail(`the peers are not linked after receive: ${JSON.stringify(report.link)}`);
+  }
+}
+
 // The whole journey with the driver in every wallet role. Each step asserts.
 async function verify() {
   const evidence = { started_at: new Date().toISOString(), steps: {} };
@@ -1044,6 +1052,9 @@ async function verify() {
   const buyer = await createBuyer();
   evidence.seller = { pubky: fixture.seller.pubky, account_xpub: fixture.seller.account_xpub, account_index: fixture.seller.account_index };
   evidence.buyer = { pubky: buyer.pubky };
+
+  const peersBefore = await capture('peers_before', () => peers([]));
+  if (!peersBefore.ready_for_purchase || peersBefore.linked) fail('before the purchase the peers must be ready for a purchase and not linked yet');
 
   const created = await capture('purchase', () => purchase(['--buyer', 'headless']));
   if (created.paykit_status.status !== 'undetected') fail('a new purchase must start undetected');
@@ -1060,6 +1071,7 @@ async function verify() {
   log('trust_boundary: ok');
 
   const received = await capture('receive', () => receive([bundle]));
+  await assertLinked(capture, bundle);
   const heightBefore = (await chainInfo()).height;
   const paid = await capture('pay', () => pay([bundle]));
   if (paid.matched_output_sats !== received.amount_sats || paid.mempool_entries !== 1) {
@@ -1215,6 +1227,8 @@ async function verifyBitkitSeller() {
 
   const buyer = await createBuyer(standin);
   evidence.buyer = { pubky: buyer.pubky };
+  const peersBefore = await capture('peers_before', () => peers(['--seller', 'bitkit']));
+  if (!peersBefore.ready_for_purchase || peersBefore.linked) fail('before the purchase the peers must be ready for a purchase and not linked yet');
   const created = await capture('purchase', () => purchase(['--seller', 'bitkit', '--buyer', 'headless']));
   if (created.seller !== standin || created.derived_address !== null) fail('a Bitkit seller purchase has no derived address in the ledger');
   if (created.paykit_status.status !== 'undetected') fail('a new purchase must start undetected');
@@ -1222,6 +1236,7 @@ async function verifyBitkitSeller() {
   const expected = await expectedAddress(xpub, 0);
 
   const received = await capture('receive', () => receive([bundle]));
+  await assertLinked(capture, bundle);
   if (received.address !== expected) fail(`the Payment Request pays ${received.address}, not the stand-in xpub's ${expected}`);
   const heightBefore = (await chainInfo()).height;
   const paid = await capture('pay', () => pay([bundle]));

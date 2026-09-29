@@ -160,6 +160,16 @@ up() {
   echo "Next: ${CLI_NAME} seed"
 }
 
+# The Pubky testnet keeps its homeserver files and DHT in memory, so it cannot
+# restart with its accounts intact. The fixture is disposable as a whole.
+down() {
+  local project
+  project="$(project_name)"
+  compose rm -sfv "${FIXTURE_SERVICES[@]}" marketplace-driver
+  docker volume rm -f "${project}_marketplace_postgres_data" "${project}_marketplace_state" >/dev/null
+  remove_evidence
+}
+
 if [ $# -eq 0 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
   show_help
   exit 0
@@ -177,16 +187,9 @@ case "$command" in
     echo
     ;;
   logs) compose logs -f --tail 100 "${@:-paykit-server}" ;;
-  down)
-    # The Pubky testnet keeps its homeserver files and DHT in memory, so it cannot
-    # restart with its accounts intact. The fixture is disposable as a whole.
-    project="$(project_name)"
-    compose rm -sfv "${FIXTURE_SERVICES[@]}" marketplace-driver
-    docker volume rm -f "${project}_marketplace_postgres_data" "${project}_marketplace_state" >/dev/null
-    remove_evidence
-    ;;
+  down) down ;;
   reset)
-    "$0" down
+    down
     up
     ;;
   seed | info | setup-url | setup-wait | seller-auth | fund | peers | purchase | receive | pay | status | mine | wait | verify | verify-bitkit-seller)
