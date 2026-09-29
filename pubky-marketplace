@@ -61,6 +61,8 @@ Purchase:
     wait <bundle> <detected|confirmed> [seconds]
                                        Wait for a signed Paykit status
     verify                             Whole headless journey with assertions; writes .marketplace/evidence/
+    verify-bitkit-seller               Bitkit seller path with a headless stand-in for the wallet (both approvals,
+                                       purchase, payout to the stand-in xpub address); writes .marketplace/evidence/
 EOF
 }
 
@@ -187,7 +189,7 @@ case "$command" in
     "$0" down
     up
     ;;
-  seed | info | setup-url | setup-wait | seller-auth | fund | peers | purchase | receive | pay | status | mine | wait | verify)
+  seed | info | setup-url | setup-wait | seller-auth | fund | peers | purchase | receive | pay | status | mine | wait | verify | verify-bitkit-seller)
     driver "$command" "$@"
     ;;
   *)

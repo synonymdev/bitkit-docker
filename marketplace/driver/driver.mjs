@@ -47,6 +47,8 @@ const LOCKS_CAPS = '/pub/locks.app/:rw';
 // The testnet's own HTTP relay; wallets reach it on localhost like the homeserver (Android: adb reverse 15412).
 const LOCKS_RELAY = 'http://localhost:15412/inbox/';
 const BITKIT_SESSION_SECRET = 'bitkit-seller.session';
+// Bitkit gives every setup request a fresh BIP84 account, starting at index 1.
+const STANDIN_ACCOUNT_INDEX = 1;
 const SERVER_PATH = 'bitkit/server';
 const BUYER_PATH = 'bitkit/wallet';
 const ACCOUNT_INDEX = 0;
@@ -997,10 +999,9 @@ async function peers(args) {
   }
 }
 
-// The whole journey with the driver in every wallet role. Each step asserts.
-async function verify() {
-  const evidence = { started_at: new Date().toISOString(), steps: {} };
-  const capture = async (name, run) => {
+// Runs a command and records its JSON output in the evidence under `name`.
+function evidenceCapture(evidence) {
+  return async (name, run) => {
     let output = '';
     const original = process.stdout.write.bind(process.stdout);
     process.stdout.write = (chunk) => {
@@ -1017,6 +1018,25 @@ async function verify() {
     log(`${name}: ok`);
     return value;
   };
+}
+
+async function writeEvidence(evidence, suffix = '') {
+  evidence.finished_at = new Date().toISOString();
+  evidence.result = 'passed';
+  if (existsSync(EVIDENCE_DIR)) {
+    const dir = `${EVIDENCE_DIR}/${evidence.started_at.replace(/[:.]/g, '-')}${suffix}`;
+    await mkdir(dir, { recursive: true });
+    await writeJson(`${dir}/summary.json`, evidence);
+    await handToHost(dir, `${dir}/summary.json`);
+    evidence.evidence_dir = `.marketplace/evidence/${dir.split('/').pop()}`;
+  }
+  out(evidence);
+}
+
+// The whole journey with the driver in every wallet role. Each step asserts.
+async function verify() {
+  const evidence = { started_at: new Date().toISOString(), steps: {} };
+  const capture = evidenceCapture(evidence);
 
   await capture('seed', () => seed(['--buyer', 'none']));
   delete evidence.steps.seed; // public facts are recorded under seller and buyer
@@ -1052,16 +1072,7 @@ async function verify() {
   const final = await capture('status', () => statusCommand([bundle]));
   if (final.purchase_state !== 'completed') fail('purchase did not complete');
 
-  evidence.finished_at = new Date().toISOString();
-  evidence.result = 'passed';
-  if (existsSync(EVIDENCE_DIR)) {
-    const dir = `${EVIDENCE_DIR}/${evidence.started_at.replace(/[:.]/g, '-')}`;
-    await mkdir(dir, { recursive: true });
-    await writeJson(`${dir}/summary.json`, evidence);
-    await handToHost(dir, `${dir}/summary.json`);
-    evidence.evidence_dir = `.marketplace/evidence/${dir.split('/').pop()}`;
-  }
-  out(evidence);
+  await writeEvidence(evidence);
 }
 
 // ---------------------------------------------------------------- Bitkit seller
@@ -1156,6 +1167,80 @@ async function sellerAuth(args) {
   });
 }
 
+// The Bitkit seller path with a headless Pubky client standing in for the wallet: it approves the marketplace
+// grant with approveAuthRequest from its own keypair and the Paykit setup with the companion claim, as the app
+// does, then a headless buyer pays the purchase and the payout must land on the address derived from the
+// stand-in's xpub. The fixture never uses that xpub to pick the address: it only checks the result.
+async function verifyBitkitSeller() {
+  const evidence = { mode: 'bitkit-seller-standin', started_at: new Date().toISOString(), steps: {} };
+  const capture = evidenceCapture(evidence);
+
+  await capture('seed', () => seed(['--buyer', 'none']));
+  delete evidence.steps.seed;
+  const existing = (await readFixture()).bitkit_seller;
+  if (existing?.kind === 'bitkit') fail('a real Bitkit seller is recorded; run ./pubky-marketplace reset before the self-test');
+
+  const identitySeed = randomBytes(32);
+  const account = HDKey.fromMasterSeed(randomBytes(32), { private: 0x04358394, public: 0x043587cf }).derive(
+    `m/84'/1'/${STANDIN_ACCOUNT_INDEX}'`,
+  );
+  const xpub = account.publicExtendedKey;
+  const standin = await signUpIdentity(identitySeed);
+  evidence.seller = { pubky: standin, account_xpub: xpub, account_index: STANDIN_ACCOUNT_INDEX, kind: 'standin' };
+
+  // Approval 1: the marketplace grant, over the relay like a wallet's approval.
+  const { flow, authUrl } = await startLocksGrant(LOCKS_RELAY);
+  await pubkyClient().signer(Keypair.fromSecret(identitySeed)).approveAuthRequest(authUrl);
+  const session = await awaitGrant(flow, 60);
+  const adopted = await adoptBitkitSeller(session, 'standin');
+  if (adopted.seller.pubky !== standin) fail('the grant was adopted for another identity');
+  if (adopted.paykitSetup === 'ready') fail('a fresh seller must not have a Paykit setup yet');
+  evidence.steps.marketplace_grant = { seller: standin, capabilities: session.info.capabilities, paykit_setup: adopted.paykitSetup };
+  log('marketplace_grant: ok');
+
+  // A purchase before the Paykit setup is refused.
+  const refused = await purchase(['--seller', 'bitkit']).then(
+    () => null,
+    (error) => error.message,
+  );
+  if (!refused?.includes('setup')) fail(`a purchase without the Paykit setup must be refused, got: ${refused}`);
+  evidence.steps.setup_required = { refused };
+  log('setup_required: ok');
+
+  // Approval 2: the watch-only setup by the same identity.
+  const { flowId, authUrl: setupAuthUrl } = await beginSetup();
+  await approveSetupAs(setupAuthUrl, identitySeed, xpub, STANDIN_ACCOUNT_INDEX);
+  await capture('setup', () => setupWait(flowId));
+  if ((await readFixture()).bitkit_seller.setup_completed_at === undefined) fail('setup was not recorded for the Bitkit seller');
+
+  const buyer = await createBuyer(standin);
+  evidence.buyer = { pubky: buyer.pubky };
+  const created = await capture('purchase', () => purchase(['--seller', 'bitkit', '--buyer', 'headless']));
+  if (created.seller !== standin || created.derived_address !== null) fail('a Bitkit seller purchase has no derived address in the ledger');
+  if (created.paykit_status.status !== 'undetected') fail('a new purchase must start undetected');
+  const bundle = created.bundle_id;
+  const expected = await expectedAddress(xpub, 0);
+
+  const received = await capture('receive', () => receive([bundle]));
+  if (received.address !== expected) fail(`the Payment Request pays ${received.address}, not the stand-in xpub's ${expected}`);
+  const heightBefore = (await chainInfo()).height;
+  const paid = await capture('pay', () => pay([bundle]));
+  const tx = await rpc('getrawtransaction', [paid.txid, true]);
+  const output = tx.vout.find((entry) => entry.scriptPubKey.address === expected);
+  if (Math.round(output?.value * 1e8) !== received.amount_sats || paid.mempool_entries !== 1) {
+    fail('the mempool must hold exactly the purchase transaction paying the stand-in xpub address');
+  }
+  await capture('detected', () => waitFor([bundle, 'detected']));
+  const mined = await capture('mine', () => mine(['--bundle', bundle]));
+  if (mined.height !== heightBefore + 1) fail('exactly one block must confirm the payment');
+  await capture('confirmed', () => waitFor([bundle, 'confirmed']));
+  const final = await capture('status', () => statusCommand([bundle]));
+  if (final.purchase_state !== 'completed' || final.payout_address !== expected) fail('purchase did not complete on the stand-in xpub address');
+  evidence.payout = { address: expected, derived_from: 'stand-in seller xpub, external child 0/0', txid: paid.txid };
+
+  await writeEvidence(evidence, '-bitkit-seller');
+}
+
 const commands = {
   init: () => init(),
   seed,
@@ -1172,6 +1257,7 @@ const commands = {
   peers,
   wait: waitFor,
   verify: () => verify(),
+  'verify-bitkit-seller': () => verifyBitkitSeller(),
 };
 
 const [command, ...args] = process.argv.slice(2);
