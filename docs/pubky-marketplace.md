@@ -79,8 +79,9 @@ Everything lives in the `marketplace_state` volume, and `down` deletes it.
 - `/state/secrets` (root, mode 0700, unreadable by Paykit Server): issuer seed, seller identity seed,
   seller wallet seed, buyer identity seed.
 - `/state/fixture.json`, `/state/purchases.json`: public facts and the purchase ledger.
-- `.marketplace/evidence/<run>/summary.json`: `verify` output. It holds public keys, bundle and request
-  ids, addresses, txids and statuses, and no seed or token.
+- `.marketplace/evidence/<run>/summary.json`: `verify` output, owned by the user who ran the wrapper (the driver
+  hands it over from its root container). It holds public keys, bundle and request ids, addresses, txids and
+  statuses, and no seed or token. `down` removes it, through a container if an older run left root-owned files.
 
 The driver never prints a seed or key. `setup-url` prints a one-time auth URL that contains a session
 secret; it is meant to be pasted into a wallet, so keep it out of logs and evidence.

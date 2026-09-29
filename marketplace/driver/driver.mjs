@@ -13,7 +13,7 @@
 
 import { spawn } from 'node:child_process';
 import { createPrivateKey, randomBytes, sign } from 'node:crypto';
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, chown, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 
 import { blake3 } from '@noble/hashes/blake3';
@@ -65,6 +65,20 @@ async function readJson(path, fallback) {
 
 async function writeJson(path, value) {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o644 });
+}
+
+// Files on the host mounts belong to the user who ran the wrapper, not to this container's root.
+async function handToHost(...paths) {
+  const uid = Number(process.env.MARKETPLACE_HOST_UID);
+  const gid = Number(process.env.MARKETPLACE_HOST_GID);
+  if (!Number.isInteger(uid) || !Number.isInteger(gid)) return;
+  for (const path of paths) {
+    try {
+      await chown(path, uid, gid);
+    } catch (error) {
+      log(`could not hand ${path} to the host user: ${error.code ?? error.message}`);
+    }
+  }
 }
 
 async function writeSecret(path, value) {
@@ -767,6 +781,7 @@ async function verify() {
     const dir = `${EVIDENCE_DIR}/${evidence.started_at.replace(/[:.]/g, '-')}`;
     await mkdir(dir, { recursive: true });
     await writeJson(`${dir}/summary.json`, evidence);
+    await handToHost(dir, `${dir}/summary.json`);
     evidence.evidence_dir = `.marketplace/evidence/${dir.split('/').pop()}`;
   }
   out(evidence);

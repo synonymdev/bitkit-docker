@@ -55,7 +55,24 @@ EOF
 
 compose() { "${COMPOSE[@]}" "$@"; }
 
-driver() { compose run --rm --no-deps --quiet-build -T marketplace-driver "$@"; }
+# The driver runs as root inside its container (it owns the root-only state volume). It hands the files it
+# writes to the host mounts (.marketplace/evidence) to the calling user, so the host can remove them later.
+driver() {
+  mkdir -p .marketplace/evidence
+  compose run --rm --no-deps --quiet-build -T \
+    -e MARKETPLACE_HOST_UID="$(id -u)" -e MARKETPLACE_HOST_GID="$(id -g)" marketplace-driver "$@"
+}
+
+# Older runs left root-owned evidence that the host user cannot delete. Empty it through the driver image
+# (root in the container), then remove the directory itself.
+remove_evidence() {
+  [ -e .marketplace/evidence ] || return 0
+  if ! rm -rf .marketplace/evidence 2>/dev/null; then
+    docker run --rm -v "$PWD/.marketplace:/host" --entrypoint find bitkit-docker/marketplace-driver:local \
+      /host/evidence -mindepth 1 -delete
+    rm -rf .marketplace/evidence
+  fi
+}
 
 project_name() { docker compose config --format json | jq -r '.name'; }
 
@@ -153,7 +170,7 @@ case "$command" in
     project="$(project_name)"
     compose rm -sfv "${FIXTURE_SERVICES[@]}" marketplace-driver
     docker volume rm -f "${project}_marketplace_postgres_data" "${project}_marketplace_state" >/dev/null
-    rm -rf .marketplace/evidence
+    remove_evidence
     ;;
   reset)
     "$0" down
