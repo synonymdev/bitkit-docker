@@ -21,6 +21,8 @@ PAYKIT_PORT="${MARKETPLACE_PAYKIT_PORT:-3001}"
 COMPOSE=(docker compose --profile marketplace)
 CHAIN_SERVICES=(bitcoind bitcoinsetup electrs)
 FIXTURE_SERVICES=(marketplace-postgres pubky-testnet paykit-server)
+# Opt-in payment request peers (README, Payment Request fixture). They share the testnet's network namespace.
+PEER_SERVICES=(fixture-issuer rc56-peer)
 
 show_help() {
   cat <<EOF
@@ -31,8 +33,8 @@ Stack:
     up                                 Build if needed, start the chain and the fixture, wait until ready
     ps                                 Show the fixture containers and Paykit Server readiness
     logs [service]                     Follow the fixture logs
-    down                               Remove the fixture containers and state (the chain stays)
-    reset                              down, then up: a fresh testnet, Paykit database and seller
+    down                               Remove the fixture containers, the payment request peers and state (the chain stays)
+    reset                              down, then up: a fresh testnet, Paykit database and seller (start the peers again)
 Fixture:
     seed [--buyer headless|none]       Mine to maturity, create the seller wallet and identity, complete the
                                        watch-only setup, optionally create a headless buyer
@@ -193,8 +195,10 @@ up() {
 down() {
   local project
   project="$(project_name)"
-  progress "removing the fixture containers"
-  compose rm -sfv "${FIXTURE_SERVICES[@]}" marketplace-driver
+  progress "removing the fixture and payment request containers"
+  # The peers run in the testnet's namespace and hold identities from it, so they go with it. Their profile is
+  # only named here so that rm reaches them; it does nothing when they were never created.
+  compose --profile payment-requests rm -sfv "${PEER_SERVICES[@]}" "${FIXTURE_SERVICES[@]}" marketplace-driver
   progress "removing the Postgres and state volumes"
   docker volume rm -f "${project}_marketplace_postgres_data" "${project}_marketplace_state" >/dev/null
   progress "removing the evidence"

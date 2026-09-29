@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# Prepare the deadline-history states between the two disposable rc56 peers.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+fail() {
+  echo "prepare: $*" >&2
+  exit 1
+}
+
+# --fail-with-body keeps the peer's JSON error; show it with the failing call instead of a bare HTTP code.
+post() {
+  local response
+  if ! response=$(curl --fail-with-body -sS -X POST "http://127.0.0.1:$1$2" -H 'content-type: application/json' -d "$3" 2>&1); then
+    echo "prepare: POST :$1$2 failed: $response" >&2
+    return 1
+  fi
+  printf '%s\n' "$response"
+}
+
+# The peers publish their identities before they listen. Until then Docker's port proxy refuses or resets the
+# connection (curl --retry retries only the refusal), so poll /health for up to 150 seconds.
+wait_health() {
+  until curl -fsS -o /dev/null "http://127.0.0.1:$1/health" 2>/dev/null; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      fail "port $1 did not answer /health; see: docker compose --profile marketplace --profile payment-requests logs fixture-issuer rc56-peer"
+    fi
+    sleep 2
+  done
+}
+deadline=$((SECONDS + 150))
+wait_health 3012
+wait_health 3013
+
+issuer=$(curl --fail-with-body -sS http://127.0.0.1:3012/info)
+peer=$(curl --fail-with-body -sS http://127.0.0.1:3013/info)
+to_peer=$(jq -nc --arg pubky "$(jq -r .pubky <<<"$peer")" --arg path "$(jq -r .receiver_path <<<"$peer")" '{peer_pubky:$pubky,peer_path:$path}')
+to_issuer=$(jq -nc --arg pubky "$(jq -r .pubky <<<"$issuer")" --arg path "$(jq -r .receiver_path <<<"$issuer")" '{peer_pubky:$pubky,peer_path:$path}')
+
+issuer_link=$(post 3012 /sync "$to_peer" 2>/dev/null || true)
+peer_link=$(post 3013 /sync "$to_issuer" 2>/dev/null || true)
+if ! jq -e '.link == "linked"' <<<"$issuer_link" >/dev/null 2>&1; then
+  post 3012 /link "$(jq -c '. + {mode:"initiate"}' <<<"$to_peer")" >/dev/null || fail 'issuer link initiate failed'
+fi
+if ! jq -e '.link == "linked"' <<<"$peer_link" >/dev/null 2>&1; then
+  post 3013 /link "$(jq -c '. + {mode:"accept"}' <<<"$to_issuer")" >/dev/null || fail 'peer link accept failed'
+fi
+linked=false
+for _ in {1..20}; do
+  issuer_link=$(post 3012 /sync "$to_peer")
+  peer_link=$(post 3013 /sync "$to_issuer")
+  if jq -e '.link == "linked"' <<<"$issuer_link" >/dev/null &&
+     jq -e '.link == "linked"' <<<"$peer_link" >/dev/null; then
+    linked=true
+    break
+  fi
+  sleep 0.2
+done
+if [ "$linked" != true ]; then
+  echo 'Paykit peers did not link' >&2
+  exit 1
+fi
+
+issue() {
+  local reference="$1" amount="$2" extra="${3:-}" response
+  if [ -z "$extra" ]; then extra='{}'; fi
+  response=$(post 3012 /request "$(jq -nc --argjson peer "$to_peer" --argjson extra "$extra" --arg ref "$reference" --argjson sats "$amount" '$peer + $extra + {reference:$ref,amount_sats:$sats}')") || return 1
+  jq -er .payment_request_id <<<"$response" || {
+    echo "prepare: no payment_request_id issuing $reference: $response" >&2
+    return 1
+  }
+}
+
+record() {
+  jq -nc --argjson peer "$to_issuer" --arg id "$1" '$peer + {payment_request_id:$id}'
+}
+
+receive() { post 3013 /sync "$to_issuer" >/dev/null; }
+sync_issuer() { post 3012 /sync "$to_peer" >/dev/null; }
+
+proposed=$(issue rc56-proposed 10000)
+receive
+
+accepted=$(issue rc56-accepted 11000)
+receive
+post 3013 /accept "$(record "$accepted")" >/dev/null
+sync_issuer
+
+rejected=$(issue rc56-rejected 12000)
+receive
+post 3013 /reject "$(record "$rejected")" >/dev/null
+sync_issuer
+
+canceled=$(issue rc56-canceled 13000)
+receive
+post 3012 /cancel "$(jq -nc --argjson peer "$to_peer" --arg id "$canceled" '$peer + {payment_request_id:$id}')" >/dev/null
+receive
+
+completed=$(issue rc56-completed 14000)
+receive
+post 3013 /accept "$(record "$completed")" >/dev/null
+sync_issuer
+paid=$(post 3013 /pay "$(jq -nc --argjson record "$(record "$completed")" --arg address "$(jq -r .address <<<"$issuer")" '$record + {address:$address,amount_sats:14000}')")
+jq -e '.proof_sent == true' <<<"$paid" >/dev/null || fail "request $completed: /pay did not deliver the proof: $paid"
+sync_issuer
+
+period=$(python3 - <<'PY'
+import calendar
+import json
+from datetime import datetime, timezone
+
+now = datetime.now(timezone.utc).replace(microsecond=0)
+previous_year = now.year - (now.month == 1)
+previous_month = (now.month - 2) % 12 + 1
+start = now.replace(year=previous_year, month=previous_month,
+                    day=min(now.day, calendar.monthrange(previous_year, previous_month)[1]))
+end = start.replace(year=now.year, month=now.month,
+                    day=min(start.day, calendar.monthrange(now.year, now.month)[1]))
+print(json.dumps({"start": start.isoformat().replace("+00:00", "Z"), "end": end.isoformat().replace("+00:00", "Z")}))
+PY
+)
+monthly_extra=$(jq -nc --arg start "$(jq -r .start <<<"$period")" '{monthly_starts_at:$start,period_start_deadline_seconds:3456000}')
+monthly_accepted=$(issue rc56-monthly-accepted 15000 "$monthly_extra")
+receive
+post 3013 /accept "$(record "$monthly_accepted")" >/dev/null
+sync_issuer
+monthly_paid=$(post 3013 /pay "$(jq -nc --argjson record "$(record "$monthly_accepted")" --arg address "$(jq -r .address <<<"$issuer")" --arg start "$(jq -r .start <<<"$period")" --arg end "$(jq -r .end <<<"$period")" '$record + {address:$address,amount_sats:15000,billing_period_start:$start,billing_period_end:$end}')")
+jq -e '.proof_sent == true' <<<"$monthly_paid" >/dev/null || fail "request $monthly_accepted: /pay did not deliver the proof: $monthly_paid"
+sync_issuer
+monthly_proposed=$(issue rc56-monthly-proposed 16000 "$monthly_extra")
+receive
+
+./bitcoin-cli mine 1 >/dev/null
+for txid in "$(jq -r .txid <<<"$paid")" "$(jq -r .txid <<<"$monthly_paid")"; do
+  docker compose exec -T bitcoind bitcoin-cli -rpcport=43782 -rpcuser=polaruser -rpcpassword=polarpass gettransaction "$txid" |
+    jq -e '.confirmations >= 1' >/dev/null || fail "transaction $txid is not confirmed after mining one block"
+done
+
+records=$(post 3013 /records "$to_issuer")
+check() {
+  local id="$1" expected="$2" actual
+  jq -e --arg id "$id" --arg expected "$expected" '.records[] | select(.payment_request_id == $id and .state == $expected)' <<<"$records" >/dev/null && return 0
+  actual=$(jq -r --arg id "$id" '[.records[] | select(.payment_request_id == $id) | .state] | first // "missing"' <<<"$records")
+  fail "request $id is $actual, expected $expected"
+}
+check "$proposed" Proposed
+check "$accepted" Accepted
+check "$rejected" Rejected
+check "$canceled" Canceled
+check "$completed" ProofSubmitted
+check "$monthly_accepted" ActiveRecurring
+check "$monthly_proposed" Proposed
+jq -e --arg id "$monthly_accepted" '.records[] | select(.payment_request_id == $id and (.payment_proofs | length) == 1)' <<<"$records" >/dev/null ||
+  fail "request $monthly_accepted does not hold exactly one payment proof"
+
+jq -nc --arg proposed "$proposed" --arg accepted "$accepted" --arg rejected "$rejected" \
+  --arg canceled "$canceled" --arg completed "$completed" --arg monthly_accepted "$monthly_accepted" \
+  --arg monthly_proposed "$monthly_proposed" --arg unpaid_start "$(jq -r .end <<<"$period")" \
+  --arg completed_txid "$(jq -r .txid <<<"$paid")" \
+  --arg monthly_txid "$(jq -r .txid <<<"$monthly_paid")" \
+  '{one_time:{proposed:$proposed,accepted:$accepted,rejected:$rejected,canceled:$canceled,proof_submitted:$completed},monthly:{accepted:$monthly_accepted,proposed:$monthly_proposed,paid_period_txid:$monthly_txid,unpaid_period_start:$unpaid_start},completed_txid:$completed_txid,verified:true}'

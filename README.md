@@ -12,6 +12,7 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
 - **VSS Server**: Versioned Storage Server for app and ldk-node state backups
 - **Homegate**: Pubky Homeserver signup gatekeeper with local admin API mock
 - **Pubky marketplace fixture** (opt-in `marketplace` profile): Pubky testnet, Paykit Server and a purchase driver for the marketplace wallet journey
+- **Payment Request fixture** (opt-in `payment-requests` profile): rc56 issuer and controlled peer on the marketplace Pubky testnet
 
 ## Quick Start
 
@@ -209,6 +210,79 @@ docker compose logs -f bitcoind
 ```
 
 ### Bitkit Testing
+
+#### Payment Requests and rc56 Deadline History
+
+The `payment-requests` profile starts two disposable Paykit rc56 SDK peers on
+the marketplace fixture's Pubky testnet. `fixture-issuer` publishes a regtest
+Paykit endpoint and sends one-time requests. `rc56-peer` can accept, reject,
+cancel and pay requests through the shared regtest Bitcoin node. Plain
+`docker compose up -d` does not start either peer. The commands below need
+`curl`, `jq` and `python3` on the host.
+
+```bash
+./pubky-marketplace up
+./pubky-marketplace seed
+docker compose --profile marketplace --profile payment-requests build fixture-issuer
+docker compose --profile marketplace --profile payment-requests up -d --no-build fixture-issuer rc56-peer
+for port in 3012 3013; do
+  until health=$(curl -fsS "http://127.0.0.1:$port/health"); do sleep 2; done
+  jq <<<"$health"
+done
+```
+
+The peers sign up on the testnet and publish their endpoints before they listen,
+so `/health` fails for a few seconds after `up`. The loop waits for them, and
+`payment-requests/prepare` does the same for up to 150 seconds. A peer retries
+its setup for two minutes and then exits; if the loop does not end, stop it and
+read `docker compose --profile marketplace --profile payment-requests logs fixture-issuer rc56-peer`.
+
+Each `/health` response gives the identity, receiver path and published
+`btc-regtest-p2wpkh` address. Prepare and verify all one-time J1 states plus
+an accepted monthly subscription with one paid period and a new monthly
+proposal:
+
+```bash
+./payment-requests/prepare | jq
+```
+
+The command returns every request id and the regtest txids after checking the
+peer's SDK states. `/pay` sends a transaction and a txid proof. If proof
+delivery fails after the transaction was sent, retry queued delivery with
+`POST /sync`; `/proof` accepts an existing wallet txid, address and amount.
+
+To test Bitkit, use a disposable app identity on this local Pubky testnet.
+Link it to the issuer's `pubky` and `receiver_path`, then `POST /link` with
+`mode: "accept"` on the issuer using the wallet's `peer_pubky` and
+`peer_path`. Call `POST /sync` while the app advances its handshake. Send
+`POST /request` to the app identity; the default actual-payment deadline is
+seven days ahead, or set `deadline_at` to a UTC RFC3339 timestamp. The app
+must synchronize the request and verify its own history row. To prepare
+rejected or canceled records, issue another request and call `/reject` or
+`/cancel` with its id from the payer side. For monthly requests,
+`POST /request` accepts `monthly_starts_at` (UTC RFC3339) and
+`period_start_deadline_seconds`; `/pay` then needs
+`billing_period_start` and `billing_period_end`.
+
+Example one-time issuance to a linked app after both sides report `Linked`:
+
+```bash
+APP_PUBKY=pubky... # replace with the disposable app identity
+curl -fsS -X POST http://127.0.0.1:3012/request -H 'content-type: application/json' \
+  -d "$(jq -nc --arg pubky "$APP_PUBKY" '{peer_pubky:$pubky,peer_path:"bitkit/wallet",amount_sats:15000,reference:"rc56-app-history"}')" | jq
+```
+
+These peers keep their identities and SDK records in memory and live in the
+Pubky testnet's network namespace, so `./pubky-marketplace down` and `reset`
+remove them together with the testnet. After `reset`, start them again with the
+`up -d --no-build fixture-issuer rc56-peer` command above, wait for `/health`,
+rerun `payment-requests/prepare` and relink the app. `./pubky-marketplace seed`
+needs outbound internet for Paykit Server setup; the rc56 peer calls use the
+local testnet. The lane still needs a Bitkit build pointed at the local Pubky
+testnet and to verify the requested rows on device. The headless preparation
+command does not populate a separate Bitkit identity's history; accepted and
+paid app rows require the lane's controlled client to prepare those records
+with the app's identity or an app build that supports importing fixture state.
 
 #### Trezor Hardware PRs
 

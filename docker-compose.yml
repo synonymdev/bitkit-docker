@@ -380,6 +380,8 @@ services:
       - "127.0.0.1:6287:6287" # homeserver Pubky TLS
       - "127.0.0.1:${MARKETPLACE_HOMESERVER_ADMIN_PORT:-16288}:6288" # homeserver admin (6288 is homegate's)
       - "127.0.0.1:${MARKETPLACE_PAYKIT_PORT:-3001}:3001" # paykit-server, shares this namespace
+      - "127.0.0.1:3012:3012" # opt-in fixture-issuer, shares this namespace
+      - "127.0.0.1:3013:3013" # opt-in rc56-peer, shares this namespace
 
   # Paykit Server 722ef268 (v0.1.0-rc4), built from source with the upstream
   # Dockerfile.local. Its setup flow emits the Pubky grant auth URL (cid and cpk)
@@ -450,6 +452,35 @@ services:
       - marketplace_state:/state
       - ./.marketplace/evidence:/evidence
     entrypoint: ["node", "/app/driver.mjs"]
+
+  # The rc56 SDK peers share the marketplace testnet namespace and regtest chain.
+  fixture-issuer:
+    profiles: [payment-requests]
+    image: bitkit-docker/payment-request-fixture:rc56-24162ebb
+    build: ./payment-requests
+    restart: "no"
+    network_mode: service:pubky-testnet
+    depends_on:
+      - pubky-testnet
+      - bitcoind
+    environment:
+      FIXTURE_ROLE: fixture-issuer
+      FIXTURE_PORT: 3012
+      BITCOIN_RPC_URL: http://bitcoind:43782
+
+  rc56-peer:
+    profiles: [payment-requests]
+    image: bitkit-docker/payment-request-fixture:rc56-24162ebb
+    build: ./payment-requests
+    restart: "no"
+    network_mode: service:pubky-testnet
+    depends_on:
+      - pubky-testnet
+      - bitcoind
+    environment:
+      FIXTURE_ROLE: rc56-peer
+      FIXTURE_PORT: 3013
+      BITCOIN_RPC_URL: http://bitcoind:43782
 
 volumes:
   bitcoin_home:
