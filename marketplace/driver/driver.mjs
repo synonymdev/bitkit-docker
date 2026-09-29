@@ -33,6 +33,8 @@ const RPC_AUTH = `${process.env.BITCOIN_RPC_USER ?? 'polaruser'}:${process.env.B
 // The static testnet homeserver key is fixed by Pubky Core.
 const HOMESERVER = 'pubky8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo';
 const SETUP_ORIGIN = 'http://localhost:8080';
+// The grant client id Paykit Server requires in its config and puts in the setup auth URL as cid.
+const PAYKIT_CLIENT_ID = 'app.paykit.server';
 const SERVER_PATH = 'bitkit/server';
 const BUYER_PATH = 'bitkit/wallet';
 const ACCOUNT_INDEX = 0;
@@ -290,6 +292,7 @@ trusted_public_key = "${issuer}"
 allowed_origins = ["${SETUP_ORIGIN}"]
 
 [paykit]
+client_id = "${PAYKIT_CLIENT_ID}"
 receiver_path = "${SERVER_PATH}"
 receiver_path_priority = ["bitkit"]
 network = "testnet"
@@ -324,6 +327,8 @@ async function completeSetup(flowId, seconds = 120) {
   }
 }
 
+const authParams = (authUrl) => new URL(authUrl.replace('pubkyauth://', 'http://pubkyauth/')).searchParams;
+
 async function beginSetup() {
   const state = `marketplace-${Date.now()}`;
   const response = await fetch(
@@ -332,7 +337,7 @@ async function beginSetup() {
   if (response.status !== 200) fail(`GET /setup returned HTTP ${response.status}`);
   const html = await response.text();
   const flow = html.match(/const flowId=("(?:[^"\\]|\\.)*");/);
-  const auth = html.match(/<code>([^<]+)<\/code>/);
+  const auth = html.match(/<a class="bitkit-btn" href="([^"]+)">/);
   if (!flow || !auth) fail('setup page has no flow id or auth URL');
   const authUrl = auth[1]
     .replaceAll('&amp;', '&')
@@ -340,17 +345,26 @@ async function beginSetup() {
     .replaceAll('&gt;', '>')
     .replaceAll('&quot;', '"')
     .replaceAll('&#39;', "'");
+  // The apps' Paykit SDK accepts only the Pubky grant protocol. A server that emits the legacy
+  // pubkyauth://signin URL (no cid or cpk) is the wrong pin, so stop here instead of at the wallet.
+  const params = authParams(authUrl);
+  if (!authUrl.startsWith('pubkyauth://signin_grant?') || !params.get('cid') || !params.get('cpk')) {
+    fail('setup auth URL is not a Pubky grant URL with cid and cpk; check the Paykit Server pin');
+  }
   return { flowId: JSON.parse(flow[1]), authUrl };
 }
 
 async function setupUrl() {
   await waitForPaykit();
   const { flowId, authUrl } = await beginSetup();
-  const claim = new URL(authUrl.replace('pubkyauth://', 'http://pubkyauth/')).searchParams.get('x-bitkit-claim');
+  const params = authParams(authUrl);
   out({
     flow_id: flowId,
     auth_url: authUrl,
-    claim,
+    // iOS has no pubkyauth handler: hand the same query to Bitkit as bitkit://pubky-auth/setup?<query>.
+    ios_url: `bitkit://pubky-auth/setup?${authUrl.slice(authUrl.indexOf('?') + 1)}`,
+    client_id: params.get('cid'),
+    claim: params.get('x-bitkit-claim'),
     next: `./pubky-marketplace setup-wait ${flowId}`,
   });
 }

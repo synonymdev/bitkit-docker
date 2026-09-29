@@ -381,14 +381,16 @@ services:
       - "127.0.0.1:${MARKETPLACE_HOMESERVER_ADMIN_PORT:-16288}:6288" # homeserver admin (6288 is homegate's)
       - "127.0.0.1:${MARKETPLACE_PAYKIT_PORT:-3001}:3001" # paykit-server, shares this namespace
 
-  # Paykit Server 867fc883 (merge of pubky/paykit-server#2), built from source
-  # with the upstream Dockerfile.local. `./pubky-marketplace build` first checks out
-  # the pinned trees under .marketplace/sources; Dockerfile.local fails closed
-  # if a tree differs from the pins in Paykit Server's Cargo manifests.
+  # Paykit Server 722ef268 (v0.1.0-rc4), built from source with the upstream
+  # Dockerfile.local. Its setup flow emits the Pubky grant auth URL (cid and cpk)
+  # that the apps' Paykit SDK requires. `./pubky-marketplace build` first checks
+  # out the pinned trees under .marketplace/sources and confirms that the tree's
+  # Cargo.lock resolves paykit-rs and locks to them; Dockerfile.local then fails
+  # closed if a tree differs from the pins in Paykit Server's Cargo manifests.
   paykit-server:
     profiles: [marketplace]
     container_name: marketplace-paykit-server
-    image: bitkit-docker/paykit-server:867fc883
+    image: bitkit-docker/paykit-server:722ef268
     build:
       context: ./.marketplace/sources/paykit-server
       dockerfile: Dockerfile.local

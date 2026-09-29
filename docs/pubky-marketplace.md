@@ -12,12 +12,27 @@ and [bitkit-android#1338](https://github.com/synonymdev/bitkit-android/pull/1338
 | Regtest bitcoind and Electrum on `tcp://127.0.0.1:60001` | the stack's `bitcoind` and `electrs` | as in `docker-compose.yml` |
 | Pubky Core static testnet: DHT, PKARR relay, HTTP relay, one homeserver with open signup | `pubky-testnet`, built from `marketplace/pubky-testnet/Dockerfile` | pubky-core `f68014c1` |
 | Homeserver and Paykit databases | `marketplace-postgres` | `postgres:16-alpine` |
-| Paykit Server | `paykit-server`, built from source with the upstream `Dockerfile.local` | pubky/paykit-server `867fc883` (merge of #2), paykit-rs `6b241878`, locks-core `df5ea1b6` |
+| Paykit Server | `paykit-server`, built from source with the upstream `Dockerfile.local` | pubky/paykit-server `722ef268` (v0.1.0-rc4), paykit-rs `9b56a0ea` (v0.1.0-rc48), locks-core `8502ef79` (v0.1.0-rc1) |
 | Purchase driver | `marketplace-driver`, run by `./pubky-marketplace` | `marketplace/driver/package-lock.json` |
 
 `./pubky-marketplace build` checks the pinned trees out under `.marketplace/sources` (git ignored) and
-fails if a checkout is not at its pin. `Dockerfile.local` then fails closed if a tree differs from the
-pins in Paykit Server's Cargo manifests. The pins are at the top of `pubky-marketplace`.
+fails if a checkout is not at its pin or if the Paykit Server tree's `Cargo.lock` does not lock paykit-rs
+and locks-core to those revisions. `Dockerfile.local` then fails closed if a tree differs from the pins in
+Paykit Server's Cargo manifests. The pins are at the top of `pubky-marketplace`.
+
+### Why this Paykit Server revision
+
+The apps ship Paykit SDK `0.1.0-rc55` (bitkit-ios and bitkit-android at their 2026-09-29 heads). Its setup
+approval accepts only the Pubky grant auth URL: `pubkyauth://signin_grant` with `cid` and `cpk`. Paykit Server
+`867fc883` (the merge of pubky/paykit-server#2) is built on paykit-rs rc43 and emits the legacy
+`pubkyauth://signin?caps&relay&secret&x-bitkit-claim` URL, which both apps reject ("Missing query parameter
+cid"). Paykit Server adopted grant URLs with paykit-rs rc48, and `722ef268` (v0.1.0-rc4) is the newest
+merged revision. It keeps `/setup` and `x-bitkit-claim=watch-only-account-v1`. Paykit Server pins paykit-rs
+rc48, three releases before the apps' rc55, and no setup, auth or companion-claim code changed between them;
+the J1 device run on 2026-09-29 already delivered requests from a paykit-rs rc43 server to rc55 apps. The
+driver's `setup-url` refuses any auth URL that is not `signin_grant` with `cid` and `cpk`, so a wrong pin
+fails before it reaches a wallet. Unmerged Paykit Server branches move to paykit-rs rc56; they are not
+pinned here.
 
 ## Ports
 
@@ -103,7 +118,8 @@ with the address in the delivered Payment Request.
 - **No Locks server, no guarded content.** The lock has no guarded resource, and the fixture does not
   cover marketplace browsing, content delivery, fiat payment or Hypercolor, which the journey also
   excludes.
-- **Bitkit apps.** The commands for Bitkit wallets follow the journey's fixture contract. They have not
-  been run against the apps in this change.
+- **Bitkit apps.** The commands for Bitkit wallets follow the journey's fixture contract. The buyer legs
+  ran on both apps in the J1 device run on 2026-09-29, against the previous Paykit Server pin. The seller
+  setup with the current pin has been run headlessly (`seed` and `verify`) and not yet against an app.
 - **Fixed container names.** The base services keep their fixed container names, so another checkout's
   stack with the same names must be removed first.
