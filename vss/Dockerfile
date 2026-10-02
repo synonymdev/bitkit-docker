@@ -1,6 +1,6 @@
 # The pinned synonymdev/vss-server tree (see .gitmodules). One cargo job and no
 # release LTO, so the image builds on a small engine VM.
-FROM rust:1.82-slim-bullseye AS builder
+FROM rust:1.82-slim-bookworm AS builder
 
 RUN apt-get update && apt-get install -y pkg-config libssl-dev libpq-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -21,9 +21,9 @@ ENV CARGO_BUILD_JOBS=1 \
     CARGO_PROFILE_RELEASE_LTO=false
 RUN cargo build --release --bin vss-server
 
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y libssl1.1 libpq5 ca-certificates \
+RUN apt-get update && apt-get install -y libssl3 libpq5 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -r -s /bin/false vss
