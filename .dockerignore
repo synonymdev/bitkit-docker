@@ -1,0 +1,7 @@
+.git
+.github
+lnd
+.trezor-user-env
+lnurl-server/data
+lnurl-server/keys/private.pem
+**/.DS_Store

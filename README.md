@@ -72,8 +72,9 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
 
 ### VSS Server
 
-- **Port**: 5050
+- **Port**: 5050 (`127.0.0.1:5050` from the `vss` profile)
 - **Features**: RS256 JWT authentication
+- **Profile**: `docker compose --profile vss up -d vss-postgres vss` starts the server and its own database without the rest of the stack or the LNURL auth server. The server checks tokens with `lnurl-server/keys/public.pem`. The default `vss-server` service is unchanged.
 
 ### Homegate
 

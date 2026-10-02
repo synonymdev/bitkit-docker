@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve LNURL-pay invoice millisatoshi precision by creating invoices with LND `value_msat` instead of truncating callback amounts to sats
 
 ### Added
+- Add a `vss` compose profile that starts the VSS server and its own database on port 5050 for wallet backup tests
 - Add Pubky marketplace test fixture behind the `marketplace` compose profile: Pubky testnet, Paykit Server `722ef268` built from pinned source, and the `pubky-marketplace` driver CLI (`up`, `seed`, `purchase`, `mine`, `verify`, `seller-auth`) for the Bitkit marketplace wallet journey with a headless or Bitkit-approved seller; see `docs/pubky-marketplace.md`
 - Add opt-in rc56 Payment Request fixture services for linked-peer and deadline-history wallet journeys
 - Homegate Docker Compose service with dedicated PostgreSQL storage, local homeserver admin mock, and README setup flow
