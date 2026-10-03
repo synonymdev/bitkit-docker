@@ -15,6 +15,8 @@ docker compose --profile trezor-emulator up -d --build --wait trezor-emulator
 docker compose --profile trezor-emulator ps trezor-emulator
 docker compose --profile trezor-emulator logs --tail 80 trezor-emulator
 curl -fsS -X POST http://127.0.0.1:21325/enumerate
+docker compose --profile trezor-emulator exec -T trezor-emulator \
+  /trezor-user-env/.venv/bin/python3 /opt/bitkit-trezor/trezor-fixture-check.py
 ```
 
 Ports: Bridge legacy `21325`, Bridge current `21328`, controller `9004`, dashboard
@@ -30,6 +32,13 @@ volumes belong to the Compose project. Bridge enumeration must contain a device,
 and controller status must report both emulator and Bridge running, before the
 container is healthy. Confirmations remain controlled by the dashboard or
 controller so the runner can observe and approve signing prompts.
+
+`trezor-fixture-check.py` is a bounded, offline fixture diagnostic. It talks to
+the device through Bridge, derives the expected public key independently from
+the public test seed, obtains regtest addresses, signs a synthetic SegWit
+transaction and verifies its signature independently. The debug link approves
+its signing prompts and restores the normal interaction mode afterwards. Run
+it before connecting an app; it neither runs an app journey nor broadcasts.
 
 The fixture does not run its own Bitcoin stack. Use the existing regtest node and
 Electrum server to fund the derived address and broadcast signed transactions.
