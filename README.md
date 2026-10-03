@@ -313,6 +313,47 @@ with the app's identity or an app build that supports importing fixture state.
 
 #### Trezor Hardware PRs
 
+For isolated Linux or Docker-backed simulator projects, use the optional
+`trezor-emulator` profile. It builds a named image from the pinned official User
+Env, starts Bridge, and initializes the deterministic T2T1 device automatically:
+
+```bash
+docker compose --profile trezor-emulator build trezor-emulator
+docker compose --profile trezor-emulator up -d --wait trezor-emulator
+curl -fsS -X POST http://127.0.0.1:21325/enumerate
+docker compose --profile trezor-emulator exec -T trezor-emulator \
+  /trezor-user-env/.venv/bin/python3 /opt/bitkit-trezor/trezor-fixture-check.py
+```
+
+Point the simulator's Bridge URL at `http://127.0.0.1:21325`. The dashboard is at
+`http://127.0.0.1:9005`, the controller at `ws://127.0.0.1:9004`, and noVNC at
+`http://127.0.0.1:6080`. For projects that remap ports, use their published Bridge
+port (or the simulator seat's forwarded address). The device uses the `all all
+...` seed, no PIN or passphrase, and the label `Bitkit Test Trezor`. Each project's
+volumes are separate, and each startup wipes and initializes its own emulator.
+The image's digest fixes both the bundled firmware and Bridge; startup downloads
+nothing. Health requires setup to finish and both Bridge and the emulator to run.
+
+The diagnostic checks the deterministic public key, a `bcrt1` address, and
+Bridge signing of a synthetic transaction with an independently verified
+signature. It uses the debug link to approve only that diagnostic's prompts;
+run it while no wallet uses the device. It needs no app or live chain and
+does not broadcast a transaction.
+
+Run the existing `bitcoind` and `electrs` services for funding and broadcasting
+regtest transactions. The emulator signs `Regtest` transactions without needing
+its own chain backend. To control button confirmations through the debug link:
+
+```bash
+docker compose --profile trezor-emulator exec -T trezor-emulator \
+  /trezor-user-env/.venv/bin/python3 /opt/bitkit-trezor/trezor-controller.py \
+  send-json '{"type":"emulator-press-yes"}'
+```
+
+See [docs/trezor-emulator.md](docs/trezor-emulator.md) for fixture diagnostics and
+the separate manual User Env workflow below. Stop only this profile's service
+with `docker compose --profile trezor-emulator stop trezor-emulator`.
+
 Use this section as the entry point when checking Bitkit app PRs or merged features that need the official Trezor emulator. Start by preparing the deterministic Trezor User Env:
 
 ```bash
