@@ -70,6 +70,33 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
   - `/generate/bolt11` - Generate Bolt11 invoice (`?amount=` sats, `?amount_msat=` msats)
   - `/.well-known/lnurlp/:username` - Lightning Address
 
+### LNURL-pay callback fixture
+
+The optional `lnurl-pay` profile serves LNURL-pay metadata and controlled invoice callback responses on port `3010`. Each Compose project has its own in-memory mode, which starts as `error` and stays there until explicitly changed. Restarting the container resets it to `error`.
+
+```bash
+docker compose --profile lnurl-pay up -d --build --wait lnurl-server-fixture
+curl -fsS http://localhost:3010/health
+# Read the encoded LNURL and QR image for the fixed payment endpoint.
+curl -fsS http://localhost:3010/generate/pay
+curl -fsS http://localhost:3010/pay/fixture
+# Initially returns HTTP 200 with LNURL status ERROR and a reason, on every request.
+curl -fsS 'http://localhost:3010/pay/fixture/callback?amount=100001'
+# Change the same callback to return a fresh signed regtest invoice.
+curl -fsS -X POST http://localhost:3010/fixture \
+  -H 'Content-Type: application/json' -d '{"mode":"healthy"}'
+curl -fsS 'http://localhost:3010/pay/fixture/callback?amount=100001'
+# Reset before another journey; GET /fixture reads the current mode.
+curl -fsS -X POST http://localhost:3010/fixture \
+  -H 'Content-Type: application/json' -d '{"mode":"error"}'
+# Verify the fixture's HTTP contract and signed invoice properties.
+docker compose --profile lnurl-pay exec -T lnurl-server-fixture node --test pay-fixture.test.js
+```
+
+Use the address and forwarded port reachable by the wallet when requesting `/generate/pay` or `/pay/fixture`: the response derives its URLs from the request's host, including any remapped port. Set `LNURL_FIXTURE_DOMAIN` before starting the service if the wallet must use a different origin (for example `http://10.0.2.2:3010` for an Android emulator).
+
+Healthy invoices use the requested amount in millisatoshis and bind the exact metadata with a SHA-256 description hash. They are signed, freshly generated `lnbcrt` invoices with a one-hour expiry and payment secret. This fixture supports invoice fetching, decoding and callback retry journeys; it has no Lightning node or channels and cannot settle payments. Use the regular LNURL server with LND for actual payments. Its controls are unauthenticated and intended only for disposable local test environments.
+
 ### VSS Server
 
 - **Port**: 5050
