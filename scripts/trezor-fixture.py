@@ -2,6 +2,8 @@
 """Start the pinned User Env and initialize a disposable deterministic device."""
 
 import json
+import argparse
+import atexit
 import os
 from pathlib import Path
 import signal
@@ -34,6 +36,24 @@ def healthy():
 
 
 def main():
+    if sys.argv[1:] == ["--server"]:
+        # Start only the User Env components this fixture uses. Upstream main.py
+        # also launches an optional MCP server that downloads a second venv.
+        sys.path.insert(0, str(Path.cwd() / "src"))
+        import binaries
+        import bridge
+        import controller
+        import dashboard
+        import emulator
+
+        atexit.register(bridge.stop)
+        atexit.register(emulator.stop)
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        binaries.explore(argparse.Namespace(verbosity=0))
+        dashboard.start()
+        controller.start()
+        return
+
     if sys.argv[1:] == ["--health"]:
         healthy()
         return
@@ -41,7 +61,7 @@ def main():
     READY.unlink(missing_ok=True)
     # The image already carries the firmware and Bridge; no runtime download.
     server = subprocess.Popen(
-        [sys.executable, "src/main.py"], start_new_session=True,
+        [sys.executable, __file__, "--server"], start_new_session=True,
     )
 
     def stop(signum=None, frame=None):

@@ -5,7 +5,7 @@
 The `trezor-emulator` Compose profile provides a Linux-compatible service with
 published ports, a reusable named image, project-scoped state and logs, and a
 healthcheck. It uses the same pinned official User Env image as the manual
-workflow. SDL3 dependencies are installed at build time. Startup launches the
+workflow, including its bundled SDL3 runtime. Startup launches the
 controller and initializes Bridge plus the deterministic T2T1 device, with bounded
 startup waits and process cleanup on exit. Firmware `2-main` and `node-bridge`
 refer to binaries already frozen in the base image's digest.
