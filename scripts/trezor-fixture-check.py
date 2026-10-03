@@ -58,7 +58,7 @@ def main():
         raise RuntimeError(f"expected one emulator, got {len(transports)}")
     path = parse_path("m/84h/1h/0h/0/0")
     destination_path = parse_path("m/84h/1h/0h/0/1")
-    with TrezorTestContext(transports[0], debug_transport=UdpTransport("127.0.0.1:21325")) as context:
+    with transports[0], TrezorTestContext(transports[0], debug_transport=UdpTransport("127.0.0.1:21325")) as context:
         with context.get_session() as session:
             features = session.features
             assert features.initialized and features.label == "Bitkit Test Trezor"
