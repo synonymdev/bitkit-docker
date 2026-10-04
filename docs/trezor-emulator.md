@@ -1,5 +1,51 @@
 # Trezor Emulator Checks
 
+## Isolated automatic fixture
+
+The `trezor-emulator` Compose profile provides a Linux-compatible service with
+published ports, a reusable named image, project-scoped state and logs, and a
+healthcheck. It uses the same pinned official User Env image as the manual
+workflow, including its bundled SDL3 runtime. Startup launches the
+controller and initializes Bridge plus the deterministic T2T1 device, with bounded
+startup waits and process cleanup on exit. Firmware `2-main` and `node-bridge`
+refer to binaries already frozen in the base image's digest.
+
+```bash
+docker compose --profile trezor-emulator up -d --build --wait trezor-emulator
+docker compose --profile trezor-emulator ps trezor-emulator
+docker compose --profile trezor-emulator logs --tail 80 trezor-emulator
+curl -fsS -X POST http://127.0.0.1:21325/enumerate
+docker compose --profile trezor-emulator exec -T trezor-emulator \
+  /trezor-user-env/.venv/bin/python3 /opt/bitkit-trezor/trezor-fixture-check.py
+```
+
+Ports: Bridge legacy `21325`, Bridge current `21328`, controller `9004`, dashboard
+`9005`, and noVNC `6080`. The controller and dashboard are published on different
+ports from the manual User Env to avoid collisions with the regtest services when
+several projects use blocks of 1000 ports. Docker-backed simulator seats remap
+these base ports and forward them to their seat's loopback address. Declare this
+profile as an on-demand offer; run no global shared device instance.
+
+Every start wipes only its own emulator and loads the public `all all ...` test
+seed, no PIN, no passphrase and the `Bitkit Test Trezor` label. Its two named
+volumes belong to the Compose project. Bridge enumeration must contain a device,
+and controller status must report both emulator and Bridge running, before the
+container is healthy. Confirmations remain controlled by the dashboard or
+controller so the runner can observe and approve signing prompts.
+
+`trezor-fixture-check.py` is a bounded, offline fixture diagnostic. It talks to
+the device through Bridge, derives the expected public key independently from
+the public test seed, obtains regtest addresses, signs a synthetic SegWit
+transaction and verifies its signature independently. The debug link approves
+its signing prompts and restores the normal interaction mode afterwards. Run
+it before connecting an app; it neither runs an app journey nor broadcasts.
+
+The fixture does not run its own Bitcoin stack. Use the existing regtest node and
+Electrum server to fund the derived address and broadcast signed transactions.
+Avoid starting the manual User Env alongside this profile on the same base ports.
+
+## Manual User Env
+
 Bitkit app PRs that need Trezor hardware behavior can use the official Trezor User Env through this repo. The helper starts the User Env without its extra regtest stack, starts Trezor Bridge, wipes a deterministic T2T1 emulator, and configures it with a stable seed and label.
 
 ## Start the Emulator
