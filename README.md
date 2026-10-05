@@ -12,7 +12,7 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
 - **VSS Server**: Versioned Storage Server for app and ldk-node state backups
 - **Homegate**: Pubky Homeserver signup gatekeeper with local admin API mock
 - **Pubky marketplace fixture** (opt-in `marketplace` profile): Pubky testnet, Paykit Server and a purchase driver for the marketplace wallet journey
-- **Payment Request fixture** (opt-in `payment-requests` profile): rc56 issuer and controlled peer on the marketplace Pubky testnet
+- **Payment Request fixture** (opt-in `payment-requests` profile): rc62 issuer and controlled peer on the marketplace Pubky testnet
 
 ## Quick Start
 
@@ -238,9 +238,9 @@ docker compose logs -f bitcoind
 
 ### Bitkit Testing
 
-#### Payment Requests and rc56 Deadline History
+#### Payment Requests and Deadline History
 
-The `payment-requests` profile starts two disposable Paykit rc56 SDK peers on
+The `payment-requests` profile starts two disposable Paykit rc62 SDK peers (paykit-rs `f2c5f712`, Pubky 0.14.0) on
 the marketplace fixture's Pubky testnet. `fixture-issuer` publishes a regtest
 Paykit endpoint and sends one-time requests. `rc56-peer` can accept, reject,
 cancel and pay requests through the shared regtest Bitcoin node. Plain
@@ -304,7 +304,7 @@ Pubky testnet's network namespace, so `./pubky-marketplace down` and `reset`
 remove them together with the testnet. After `reset`, start them again with the
 `up -d --no-build fixture-issuer rc56-peer` command above, wait for `/health`,
 rerun `payment-requests/prepare` and relink the app. `./pubky-marketplace seed`
-needs outbound internet for Paykit Server setup; the rc56 peer calls use the
+needs outbound internet for Paykit Server setup; the rc62 peer calls use the
 local testnet. The lane still needs a Bitkit build pointed at the local Pubky
 testnet and to verify the requested rows on device. The headless preparation
 command does not populate a separate Bitkit identity's history; accepted and

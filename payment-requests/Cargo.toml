@@ -8,9 +8,9 @@ anyhow = "1"
 async-trait = "0.1"
 axum = "0.8"
 chrono = "0.4"
-paykit-lib = { git = "https://github.com/pubky/paykit-rs.git", rev = "24162ebbcc703251d8038f2e176d1f4cfb117c6a" }
-paykit-sdk = { git = "https://github.com/pubky/paykit-rs.git", rev = "24162ebbcc703251d8038f2e176d1f4cfb117c6a" }
-pubky = "=0.11.0"
+paykit-lib = { git = "https://github.com/pubky/paykit-rs.git", rev = "f2c5f7127b1cb0f29052ce76e43f3c0ae468fd12" }
+paykit-sdk = { git = "https://github.com/pubky/paykit-rs.git", rev = "f2c5f7127b1cb0f29052ce76e43f3c0ae468fd12" }
+pubky = "=0.14.0"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
