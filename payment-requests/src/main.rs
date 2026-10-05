@@ -305,9 +305,11 @@ async fn sync_locked(app: &App, peer: PubkyPublicKey) -> Result<Value> {
         .process_outbound_private_messages(peer.clone())
         .await?;
     let records = app.sdk.payment_requests_with(&peer).await?;
+    let lists = app.sdk.current_private_payment_lists(&peer).await?;
     Ok(
         json!({ "link": "linked", "received": received.stream_item_ids.len(),
-        "sent": sent.sent.len(), "failed": sent.failed.len(), "records": records }),
+        "sent": sent.sent.len(), "failed": sent.failed.len(), "records": records,
+        "private_payment_lists": lists }),
     )
 }
 
@@ -357,6 +359,17 @@ async fn issue(State(app): State<Arc<App>>, Json(input): Json<RequestInput>) -> 
             timestamp: deadline,
         }))
     };
+    // rc62 apps show "waiting for updated private payment details" until the issuer's Private Payment List reached them: the list goes
+    // out with the request, with the regtest endpoint of the fixture as its one private receiving detail.
+    app.sdk
+        .enqueue_private_payment_list_with_receiving_details(
+            peer.clone(),
+            vec![paykit_sdk::PrivateReceivingDetail {
+                identifier: ENDPOINT.into(),
+                payload: json!({ "value": app.address }).to_string(),
+            }],
+        )
+        .await?;
     let record = app
         .sdk
         .propose_payment_request(peer.clone(), terms.build()?)
@@ -365,9 +378,9 @@ async fn issue(State(app): State<Arc<App>>, Json(input): Json<RequestInput>) -> 
         .sdk
         .process_outbound_private_messages(peer)
         .await?;
-    if !sent.failed.is_empty() || sent.sent.len() != 1 {
+    if !sent.failed.is_empty() || sent.sent.len() < 2 {
         return Err(anyhow!(
-            "Payment Request delivery failed: {} failed, {} sent",
+            "Payment Request delivery failed: {} failed, {} sent (the private payment list and the request)",
             sent.failed.len(),
             sent.sent.len()
         )
