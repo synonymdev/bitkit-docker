@@ -10,52 +10,36 @@ and [bitkit-android#1338](https://github.com/synonymdev/bitkit-android/pull/1338
 | Piece | Where | Pin |
 | --- | --- | --- |
 | Regtest bitcoind and Electrum on `tcp://127.0.0.1:60001` | the stack's `bitcoind` and `electrs` | as in `docker-compose.yml` |
-| Pubky static testnet: DHT, PKARR relay, HTTP relay, one homeserver with open signup | `pubky-testnet`, built from `marketplace/pubky-testnet/Dockerfile` | `pubky-testnet` crate 0.14.0 (earlier pin: `Dockerfile.core`, pubky-core `f68014c1`) |
+| Pubky static testnet: DHT, PKARR relay, HTTP relay, one homeserver with open signup | `pubky-testnet`, built from `marketplace/pubky-testnet/Dockerfile` | `pubky-testnet` crate 0.14.0 |
 | Homeserver and Paykit databases | `marketplace-postgres` | `postgres:16-alpine` |
-| Paykit Server | `paykit-server`, built from source with the upstream `Dockerfile.local` | pubky/paykit-server `722ef268` (v0.1.0-rc4), paykit-rs `9b56a0ea` (v0.1.0-rc48), locks-core `8502ef79` (v0.1.0-rc1) |
-| Purchase driver | `marketplace-driver`, run by `./pubky-marketplace` | `marketplace/driver/package-lock.json`, `@synonymdev/pubky` 0.10.0 |
+| Paykit Server | `paykit-server`, built from source with the upstream `Dockerfile.local` | pubky/paykit-server `af0151a`, paykit-rs `7b75d28c` (v0.1.0-rc59), locks-core `8502ef79` (v0.1.0-rc1) |
+| Purchase driver | `marketplace-driver`, run by `./pubky-marketplace` | `marketplace/driver/package-lock.json`, `@synonymdev/pubky` 0.14.0 |
 
 `./pubky-marketplace build` checks the pinned trees out under `.marketplace/sources` (git ignored) and
 fails if a checkout is not at its pin or if the Paykit Server tree's `Cargo.lock` does not lock paykit-rs
 and locks-core to those revisions. `Dockerfile.local` then fails closed if a tree differs from the pins in
 Paykit Server's Cargo manifests. The pins are at the top of `pubky-marketplace`.
 
-### Why this Paykit Server revision
+### Why these versions
 
-The apps ship Paykit SDK `0.1.0-rc55` (bitkit-ios and bitkit-android at their 2026-09-29 heads). Its setup
-approval accepts only the Pubky grant auth URL: `pubkyauth://signin_grant` with `cid` and `cpk`. Paykit Server
-`867fc883` (the merge of pubky/paykit-server#2) is built on paykit-rs rc43 and emits the legacy
-`pubkyauth://signin?caps&relay&secret&x-bitkit-claim` URL, which both apps reject ("Missing query parameter
-cid"). Paykit Server adopted grant URLs with paykit-rs rc48, and `722ef268` (v0.1.0-rc4) is the newest
-merged revision. It keeps `/setup` and `x-bitkit-claim=watch-only-account-v1`. Paykit Server pins paykit-rs
-rc48, three releases before the apps' rc55, and no setup, auth or companion-claim code changed between them;
-the J1 device run on 2026-09-29 already delivered requests from a paykit-rs rc43 server to rc55 apps. The
-driver's `setup-url` refuses any auth URL that is not `signin_grant` with `cid` and `cpk`, so a wrong pin
-fails before it reaches a wallet. Unmerged Paykit Server branches move to paykit-rs rc56; they are not
-pinned here.
+Current Bitkit builds (Paykit SDK rc62) take a Pubky write lock (`LOCK` and `UNLOCK` on the path) before they write Paykit state. The
+homeserver of the earlier Pubky Core pin `f68014c1` answers `LOCK` with 405, so creating a profile or publishing Paykit data failed in the
+app. The 0.14.0 homeserver grants the locks.
 
-### Why the testnet is 0.14.0, and when to use the earlier pin
+Paykit Server `af0151a` (1 Oct 2026) is on Pubky 0.14.0 and paykit-rs rc59 and keeps `/setup` with `x-bitkit-claim=watch-only-account-v1`;
+its setup flow emits the Pubky grant auth URL (`pubkyauth://signin_grant` with `cid` and `cpk`) that the apps accept. The driver's
+`setup-url` refuses any auth URL that is not `signin_grant` with `cid` and `cpk`, so a wrong pin fails before it reaches a wallet. The
+server's config names its Paykit app with `app_id` (paykit-rs rc59 has no receiver folders), and the driver reads the app registry
+(`/pub/paykit/v0/app-registry.json`) where it read `receiver.json`. The driver's client is `@synonymdev/pubky` 0.14.0, the release of the
+homeserver, whose signin names its client and returns a grant session, so the headless seller signs in as `marketplace.fixture`.
 
-Current Bitkit builds take a Pubky write lock (`LOCK` and `UNLOCK` on the path) before they write Paykit state. The homeserver of the
-earlier Pubky Core pin `f68014c1` answers `LOCK` with 405, so creating a profile or publishing Paykit data fails in the app. The 0.14.0
-homeserver grants the locks; the rc56 payment request peers (`fixture-issuer`, `rc56-peer`) sign up and publish their receivers on it.
-Paykit Server `722ef268` and the headless marketplace driver (below) were exercised only against the earlier pin: on 0.14.0 `up` reaches
-a ready Paykit Server, but `seed` stops at `companion approval failed: companion authentication failed`. For the headless journey
-(`seed`, `purchase`, `verify`) start the earlier pin:
+### Known limit: the headless seller stand-in
 
-```bash
-PUBKY_TESTNET_IMAGE=bitkit-docker/pubky-testnet:f68014c1 PUBKY_TESTNET_DOCKERFILE=Dockerfile.core ./pubky-marketplace reset
-```
-
-### Why `@synonymdev/pubky` 0.10.0
-
-Both the Bitkit seller approval and the headless seller need the grant auth flow, which the driver's earlier
-0.9.3 client lacks (it has cookie auth only). The earlier pinned homeserver, Pubky Core `f68014c1` (2026-07-31), sits
-between v0.9.3 and v0.10.0 (2026-08-05); the commits between it and v0.10.0 are documentation, callback
-parameters and one error-surfacing change. 0.10.0 is therefore the client that matches the homeserver. 0.11.0 and
-later upgrade pkarr to v8 and the relay to v2 past that homeserver and are not used until the testnet pin moves.
-In 0.10.0 a signin names its client and returns a grant session, so the headless seller signs in as
-`marketplace.fixture`.
+Paykit Server `af0151a` verifies the seller's app registry (`/pub/paykit/v0/app-registry.json`, written by the Paykit SDK from the seller's Paykit
+identity key) before it persists a setup. A Bitkit wallet publishes it itself, so the app paths work: `setup-url`, `setup-wait`, `seller-auth`,
+`purchase --seller bitkit`, `receive`, `pay`, `mine` and `peers` against a Bitkit seller, with the headless buyer. The Node driver has no Paykit SDK
+to publish that registry for its own headless seller, so `seed` stops at `setup flow ended with HTTP 422 setup_failed`, and `verify` and
+`verify-bitkit-seller`, which use the headless seller or a headless stand-in for the wallet, do not run until the driver gets one.
 
 ## Ports
 

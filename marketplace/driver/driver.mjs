@@ -51,6 +51,7 @@ const BITKIT_SESSION_SECRET = 'bitkit-seller.session';
 const STANDIN_ACCOUNT_INDEX = 1;
 const SERVER_PATH = 'bitkit/server';
 const BUYER_PATH = 'bitkit/wallet';
+const BUYER_APP_ID = 'bitkit';
 const ACCOUNT_INDEX = 0;
 const DEFAULT_SATS = 15000;
 const EXPECTED_ASSET = 'btc';
@@ -290,9 +291,8 @@ function runHelper(binary, input, env = {}) {
 const readerEnv = (seller) => ({
   PAYKIT_READER_STATE_PATH: `${STATE}/reader/state.bin`,
   PAYKIT_READER_PUBKY_TESTNET_HOST: 'localhost',
-  PAYKIT_READER_RECEIVER_PATH: BUYER_PATH,
+  PAYKIT_READER_APP_ID: BUYER_APP_ID,
   PAYKIT_READER_SERVER_PUBKY: seller,
-  PAYKIT_READER_SERVER_PATH: SERVER_PATH,
 });
 
 // ------------------------------------------------------------------ encodings
@@ -345,8 +345,7 @@ allowed_origins = ["${SETUP_ORIGIN}"]
 
 [paykit]
 client_id = "${PAYKIT_CLIENT_ID}"
-receiver_path = "${SERVER_PATH}"
-receiver_path_priority = ["bitkit"]
+app_id = "paykit-server"
 network = "testnet"
 
 [bitcoin]
@@ -372,7 +371,7 @@ async function completeSetup(flowId, seconds = 120) {
     const response = await fetch(`${PAYKIT_URL}/setup/${flowId}/complete`, { method: 'POST' });
     if (response.status === 200) return;
     if (![408, 425, 429, 502, 503, 504].includes(response.status)) {
-      fail(`setup flow ended with HTTP ${response.status}`);
+      fail(`setup flow ended with HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
     }
     if (Date.now() > deadline) fail('setup flow did not complete in time');
     await sleep(1500);
@@ -415,6 +414,7 @@ async function approveSetupAs(authUrl, identitySeed, xpub, accountIndex) {
     creator_secret: b64url(identitySeed),
     account_xpub: xpub,
     account_index: accountIndex,
+    key_generation: 1,
   });
   if (approval.code !== 0 || !approval.stdout.includes('"approved"')) {
     fail(`companion approval failed: ${approval.stderr || approval.stdout}`);
@@ -910,7 +910,7 @@ async function waitFor(args) {
 // It reads what the fixture can see: each side's public Paykit receiver marker, the seller's setup
 // authority, and Paykit Server's persisted peer state for a purchase's reader binding.
 async function receiverMarker(pubky, receiverPath) {
-  const path = `/pub/paykit/v0/${receiverPath}/receiver.json`;
+  const path = `/pub/paykit/v0/app-registry.json`;
   const storage = pubkyClient().publicStorage;
   if (!(await storage.exists(`${pubky}${path}`))) return { path, present: false };
   return { path, present: true, marker: await storage.getJson(`${pubky}${path}`) };

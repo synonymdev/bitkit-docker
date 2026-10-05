@@ -412,14 +412,11 @@ services:
   pubky-testnet:
     profiles: [marketplace]
     container_name: marketplace-pubky-testnet
-    # The homeserver of 0.14.0 answers the Pubky SDK's LOCK and UNLOCK write locks that current Bitkit builds take before writing Paykit
-    # state; the earlier Pubky Core pin (`Dockerfile.core`, tag f68014c1) answers 405. Paykit Server 722ef268 and the marketplace driver
-    # only complete their watch-only setup against that earlier pin: for `pubky-marketplace seed` and `verify` run
-    # `PUBKY_TESTNET_IMAGE=bitkit-docker/pubky-testnet:f68014c1 PUBKY_TESTNET_DOCKERFILE=Dockerfile.core ./pubky-marketplace reset`.
-    image: ${PUBKY_TESTNET_IMAGE:-bitkit-docker/pubky-testnet:0.14.0}
+    # The homeserver of 0.14.0 answers the Pubky SDK's LOCK and UNLOCK write locks that current Bitkit builds take before writing Paykit state; the
+    # earlier Pubky Core pin (f68014c1) answered 405.
+    image: bitkit-docker/pubky-testnet:0.14.0
     build:
       context: ./marketplace/pubky-testnet
-      dockerfile: ${PUBKY_TESTNET_DOCKERFILE:-Dockerfile}
     restart: "no" # the fixture is disposable: a restarted testnet loses its accounts
     depends_on:
       marketplace-postgres:
@@ -439,7 +436,7 @@ services:
       - "127.0.0.1:3012:3012" # opt-in fixture-issuer, shares this namespace
       - "127.0.0.1:3013:3013" # opt-in rc56-peer, shares this namespace
 
-  # Paykit Server 722ef268 (v0.1.0-rc4), built from source with the upstream
+  # Paykit Server af0151a (paykit-rs rc59, Pubky 0.14.0), built from source with the upstream
   # Dockerfile.local. Its setup flow emits the Pubky grant auth URL (cid and cpk)
   # that the apps' Paykit SDK requires. `./pubky-marketplace build` first checks
   # out the pinned trees under .marketplace/sources and confirms that the tree's
@@ -448,7 +445,7 @@ services:
   paykit-server:
     profiles: [marketplace]
     container_name: marketplace-paykit-server
-    image: bitkit-docker/paykit-server:722ef268
+    image: bitkit-docker/paykit-server:af0151a
     build:
       context: ./.marketplace/sources/paykit-server
       dockerfile: Dockerfile.local
@@ -491,7 +488,7 @@ services:
   # paykit-reader-demo helper binaries from the paykit-server image.
   marketplace-driver:
     profiles: [marketplace]
-    image: bitkit-docker/marketplace-driver:local
+    image: bitkit-docker/marketplace-driver:0.14.0
     build:
       context: ./marketplace/driver
       additional_contexts:

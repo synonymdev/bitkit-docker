@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Move the payment request fixture peers to paykit-rs rc62 on Pubky 0.14.0, the SDK current Bitkit builds use (the `fixture-issuer` and `rc56-peer` service names stay)
-- Run the marketplace fixture's Pubky testnet on the 0.14.0 homeserver, which grants the `LOCK` write locks current Bitkit builds take; the earlier Pubky Core pin stays available through `PUBKY_TESTNET_IMAGE` and `PUBKY_TESTNET_DOCKERFILE`
+- Move the marketplace fixture to the Pubky 0.14.0 homeserver, which grants the `LOCK` write locks current Bitkit builds take, with Paykit Server `af0151a` (paykit-rs rc59) and the driver on `@synonymdev/pubky` 0.14.0
 - Show ready-to-copy settle and cancel commands in `holdinvoice` output
 - Simplify LND funding step in README to a single command instead of clipboard-based two-step flow
 

@@ -7,13 +7,13 @@ set -euo pipefail
 CLI_NAME="$(basename "$0")"
 cd "$(dirname "$0")"
 
-# Pinned upstream revisions. Paykit Server 722ef268 is v0.1.0-rc4 (pubky/paykit-server master). Its setup
+# Pinned upstream revisions. Paykit Server af0151a is the revision of 1 Oct 2026 on Pubky 0.14.0 and paykit-rs rc59 (pubky/paykit-server master). Its setup
 # flow emits the Pubky grant auth URL (pubkyauth://signin_grant with cid and cpk) that the apps' Paykit SDK
 # (0.1.0-rc55) requires, and still carries x-bitkit-claim=watch-only-account-v1. Earlier revisions such as
 # 867fc883 emit the legacy pubkyauth://signin URL, which the apps reject.
-# The Pubky testnet is pinned in marketplace/pubky-testnet/Dockerfile (Dockerfile.core is the earlier Pubky Core pin).
-PAYKIT_SERVER_REV=722ef26834d8a4fc849de1d883eb296106dd2006
-PAYKIT_RS_REV=9b56a0eacd6874137370fa79ec0f40b809140809   # v0.1.0-rc48, paykit-server's paykit-lib and paykit-sdk pin
+# The Pubky testnet is pinned in marketplace/pubky-testnet/Dockerfile.
+PAYKIT_SERVER_REV=af0151a40bc67d4fbfaebc3b4242b53fe64a3ffc
+PAYKIT_RS_REV=7b75d28c2679656a0d1c6e1ef6d8ee9881c9be07   # v0.1.0-rc59, paykit-server's paykit-lib and paykit-sdk pin
 LOCKS_REV=8502ef79c443c640976a2a901b80c5e717319149       # v0.1.0-rc1, paykit-server's locks-core pin
 
 SOURCES=.marketplace/sources
@@ -26,7 +26,7 @@ PEER_SERVICES=(fixture-issuer rc56-peer)
 
 show_help() {
   cat <<EOF
-Pubky marketplace fixture: Pubky testnet, Paykit Server 722ef268, regtest chain and a purchase driver.
+Pubky marketplace fixture: Pubky testnet, Paykit Server af0151a, regtest chain and a purchase driver.
 Usage: ${CLI_NAME} <command> [options]
 Stack:
     build                              Fetch the pinned sources and build the images
@@ -133,7 +133,7 @@ fetch_pinned() {
 # swaps those for the checkouts below. Fail here, before a long build, if a tag does not resolve to our pins.
 check_lock_pins() {
   local lock="$SOURCES/paykit-server/Cargo.lock"
-  if ! grep -Fq "source = \"git+https://github.com/pubky/paykit-rs.git?tag=v0.1.0-rc48#$PAYKIT_RS_REV\"" "$lock" ||
+  if ! grep -Fq "source = \"git+https://github.com/pubky/paykit-rs.git?tag=v0.1.0-rc59#$PAYKIT_RS_REV\"" "$lock" ||
     ! grep -Fq "source = \"git+https://github.com/pubky/locks.git?tag=v0.1.0-rc1#$LOCKS_REV\"" "$lock"; then
     echo "$lock does not lock paykit-rs $PAYKIT_RS_REV and locks $LOCKS_REV" >&2
     exit 1
@@ -154,8 +154,8 @@ build() {
 }
 
 images_present() {
-  docker image inspect "${PUBKY_TESTNET_IMAGE:-bitkit-docker/pubky-testnet:0.14.0}" bitkit-docker/paykit-server:722ef268 \
-    bitkit-docker/marketplace-driver:local >/dev/null 2>&1
+  docker image inspect bitkit-docker/pubky-testnet:0.14.0 bitkit-docker/paykit-server:af0151a \
+    bitkit-docker/marketplace-driver:0.14.0 >/dev/null 2>&1
 }
 
 wait_ready() {
