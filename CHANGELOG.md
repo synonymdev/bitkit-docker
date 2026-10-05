@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Run the marketplace fixture's Pubky testnet on the 0.14.0 homeserver, which grants the `LOCK` write locks current Bitkit builds take; the earlier Pubky Core pin stays available through `PUBKY_TESTNET_IMAGE` and `PUBKY_TESTNET_DOCKERFILE`
 - Show ready-to-copy settle and cancel commands in `holdinvoice` output
 - Simplify LND funding step in README to a single command instead of clipboard-based two-step flow
 

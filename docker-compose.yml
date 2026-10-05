@@ -412,9 +412,14 @@ services:
   pubky-testnet:
     profiles: [marketplace]
     container_name: marketplace-pubky-testnet
-    image: bitkit-docker/pubky-testnet:f68014c1
+    # The homeserver of 0.14.0 answers the Pubky SDK's LOCK and UNLOCK write locks that current Bitkit builds take before writing Paykit
+    # state; the earlier Pubky Core pin (`Dockerfile.core`, tag f68014c1) answers 405. Paykit Server 722ef268 and the marketplace driver
+    # only complete their watch-only setup against that earlier pin: for `pubky-marketplace seed` and `verify` run
+    # `PUBKY_TESTNET_IMAGE=bitkit-docker/pubky-testnet:f68014c1 PUBKY_TESTNET_DOCKERFILE=Dockerfile.core ./pubky-marketplace reset`.
+    image: ${PUBKY_TESTNET_IMAGE:-bitkit-docker/pubky-testnet:0.14.0}
     build:
       context: ./marketplace/pubky-testnet
+      dockerfile: ${PUBKY_TESTNET_DOCKERFILE:-Dockerfile}
     restart: "no" # the fixture is disposable: a restarted testnet loses its accounts
     depends_on:
       marketplace-postgres:

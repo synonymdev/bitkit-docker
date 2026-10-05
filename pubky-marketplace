@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 # flow emits the Pubky grant auth URL (pubkyauth://signin_grant with cid and cpk) that the apps' Paykit SDK
 # (0.1.0-rc55) requires, and still carries x-bitkit-claim=watch-only-account-v1. Earlier revisions such as
 # 867fc883 emit the legacy pubkyauth://signin URL, which the apps reject.
-# Pubky Core is pinned in marketplace/pubky-testnet/Dockerfile.
+# The Pubky testnet is pinned in marketplace/pubky-testnet/Dockerfile (Dockerfile.core is the earlier Pubky Core pin).
 PAYKIT_SERVER_REV=722ef26834d8a4fc849de1d883eb296106dd2006
 PAYKIT_RS_REV=9b56a0eacd6874137370fa79ec0f40b809140809   # v0.1.0-rc48, paykit-server's paykit-lib and paykit-sdk pin
 LOCKS_REV=8502ef79c443c640976a2a901b80c5e717319149       # v0.1.0-rc1, paykit-server's locks-core pin
@@ -154,7 +154,7 @@ build() {
 }
 
 images_present() {
-  docker image inspect bitkit-docker/pubky-testnet:f68014c1 bitkit-docker/paykit-server:722ef268 \
+  docker image inspect "${PUBKY_TESTNET_IMAGE:-bitkit-docker/pubky-testnet:0.14.0}" bitkit-docker/paykit-server:722ef268 \
     bitkit-docker/marketplace-driver:local >/dev/null 2>&1
 }
 

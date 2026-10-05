@@ -10,7 +10,7 @@ and [bitkit-android#1338](https://github.com/synonymdev/bitkit-android/pull/1338
 | Piece | Where | Pin |
 | --- | --- | --- |
 | Regtest bitcoind and Electrum on `tcp://127.0.0.1:60001` | the stack's `bitcoind` and `electrs` | as in `docker-compose.yml` |
-| Pubky Core static testnet: DHT, PKARR relay, HTTP relay, one homeserver with open signup | `pubky-testnet`, built from `marketplace/pubky-testnet/Dockerfile` | pubky-core `f68014c1` |
+| Pubky static testnet: DHT, PKARR relay, HTTP relay, one homeserver with open signup | `pubky-testnet`, built from `marketplace/pubky-testnet/Dockerfile` | `pubky-testnet` crate 0.14.0 (earlier pin: `Dockerfile.core`, pubky-core `f68014c1`) |
 | Homeserver and Paykit databases | `marketplace-postgres` | `postgres:16-alpine` |
 | Paykit Server | `paykit-server`, built from source with the upstream `Dockerfile.local` | pubky/paykit-server `722ef268` (v0.1.0-rc4), paykit-rs `9b56a0ea` (v0.1.0-rc48), locks-core `8502ef79` (v0.1.0-rc1) |
 | Purchase driver | `marketplace-driver`, run by `./pubky-marketplace` | `marketplace/driver/package-lock.json`, `@synonymdev/pubky` 0.10.0 |
@@ -34,10 +34,23 @@ driver's `setup-url` refuses any auth URL that is not `signin_grant` with `cid` 
 fails before it reaches a wallet. Unmerged Paykit Server branches move to paykit-rs rc56; they are not
 pinned here.
 
+### Why the testnet is 0.14.0, and when to use the earlier pin
+
+Current Bitkit builds take a Pubky write lock (`LOCK` and `UNLOCK` on the path) before they write Paykit state. The homeserver of the
+earlier Pubky Core pin `f68014c1` answers `LOCK` with 405, so creating a profile or publishing Paykit data fails in the app. The 0.14.0
+homeserver grants the locks; the rc56 payment request peers (`fixture-issuer`, `rc56-peer`) sign up and publish their receivers on it.
+Paykit Server `722ef268` and the headless marketplace driver (below) were exercised only against the earlier pin: on 0.14.0 `up` reaches
+a ready Paykit Server, but `seed` stops at `companion approval failed: companion authentication failed`. For the headless journey
+(`seed`, `purchase`, `verify`) start the earlier pin:
+
+```bash
+PUBKY_TESTNET_IMAGE=bitkit-docker/pubky-testnet:f68014c1 PUBKY_TESTNET_DOCKERFILE=Dockerfile.core ./pubky-marketplace reset
+```
+
 ### Why `@synonymdev/pubky` 0.10.0
 
 Both the Bitkit seller approval and the headless seller need the grant auth flow, which the driver's earlier
-0.9.3 client lacks (it has cookie auth only). The pinned homeserver, Pubky Core `f68014c1` (2026-07-31), sits
+0.9.3 client lacks (it has cookie auth only). The earlier pinned homeserver, Pubky Core `f68014c1` (2026-07-31), sits
 between v0.9.3 and v0.10.0 (2026-08-05); the commits between it and v0.10.0 are documentation, callback
 parameters and one error-surfacing change. 0.10.0 is therefore the client that matches the homeserver. 0.11.0 and
 later upgrade pkarr to v8 and the relay to v2 past that homeserver and are not used until the testnet pin moves.
