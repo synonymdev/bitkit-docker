@@ -72,6 +72,21 @@ struct App {
     role: String,
     // The SDK stores per-peer operation leases; serialize manual control calls.
     operation: Mutex<()>,
+    // `/endpoints` withhold: no public endpoint and an empty private payment list, so an app cannot resolve the request's endpoint
+    withheld: Mutex<bool>,
+}
+
+impl App {
+    /// The receiving details the issuer offers: none while its endpoints are withheld.
+    fn private_details(&self, withheld: bool) -> Vec<paykit_sdk::PrivateReceivingDetail> {
+        if withheld {
+            return vec![];
+        }
+        vec![paykit_sdk::PrivateReceivingDetail {
+            identifier: ENDPOINT.into(),
+            payload: json!({ "value": self.address }).to_string(),
+        }]
+    }
 }
 
 #[derive(Deserialize)]
@@ -271,6 +286,7 @@ async fn setup() -> Result<App> {
         address,
         role,
         operation: Mutex::new(()),
+        withheld: Mutex::new(false),
     })
 }
 
@@ -374,14 +390,10 @@ async fn issue(State(app): State<Arc<App>>, Json(input): Json<RequestInput>) -> 
     };
     // rc62 apps show "waiting for updated private payment details" until the issuer's Private Payment List reached them: the list goes
     // out with the request, with the regtest endpoint of the fixture as its one private receiving detail.
+    // While `/endpoints` withholds them, the list goes out empty: the request names an endpoint the app cannot resolve.
+    let withheld = *app.withheld.lock().await;
     app.sdk
-        .enqueue_private_payment_list_with_receiving_details(
-            peer.clone(),
-            vec![paykit_sdk::PrivateReceivingDetail {
-                identifier: ENDPOINT.into(),
-                payload: json!({ "value": app.address }).to_string(),
-            }],
-        )
+        .enqueue_private_payment_list_with_receiving_details(peer.clone(), app.private_details(withheld))
         .await?;
     let mut record = app
         .sdk
@@ -423,7 +435,8 @@ async fn issue(State(app): State<Arc<App>>, Json(input): Json<RequestInput>) -> 
     }
     Ok(Json(
         json!({ "payment_request_id": record.payment_request_id, "state": record.state,
-        "deadline": record.terms.as_ref().and_then(|terms| terms.payment_deadline.as_ref()) }),
+        "deadline": record.terms.as_ref().and_then(|terms| terms.payment_deadline.as_ref()),
+        "endpoints_withheld": withheld }),
     ))
 }
 
@@ -603,6 +616,53 @@ async fn withdraw(State(app): State<Arc<App>>, Json(input): Json<Peer>) -> ApiRe
  Ok(Json(serde_json::to_value(report)?))
 }
 
+#[derive(Deserialize)]
+struct EndpointsInput {
+    // `withhold` or `restore`
+    action: String,
+    // the peer whose private payment list follows the change; without one only the public endpoint changes
+    #[serde(flatten)]
+    peer: Option<Peer>,
+}
+
+async fn endpoints_state(State(app): State<Arc<App>>) -> ApiResult {
+    Ok(Json(json!({ "withheld": *app.withheld.lock().await, "endpoint": ENDPOINT })))
+}
+
+/// Withholds or restores the issuer's payment endpoints: its public endpoint and, for the named peer, its private payment list.
+async fn endpoints(State(app): State<Arc<App>>, Json(input): Json<EndpointsInput>) -> ApiResult {
+    let _guard = app.operation.lock().await;
+    let withheld = match input.action.as_str() {
+        "withhold" => true,
+        "restore" => false,
+        other => return Err(anyhow!("action must be withhold or restore, not {other}").into()),
+    };
+    *app.withheld.lock().await = withheld;
+    let public: Vec<paykit_sdk::PublicReceivingDetail> = app
+        .private_details(withheld)
+        .into_iter()
+        .map(|detail| paykit_sdk::PublicReceivingDetail { identifier: detail.identifier, payload: detail.payload })
+        .collect();
+    let published = app.sdk.sync_public_endpoints_with_receiving_details(public).await?;
+    let mut private = Value::Null;
+    if let Some(peer) = input.peer {
+        let peer = peer.parsed()?;
+        app.sdk
+            .enqueue_private_payment_list_with_receiving_details(peer.clone(), app.private_details(withheld))
+            .await?;
+        let sent = app.sdk.process_outbound_private_messages(peer).await?;
+        if !sent.failed.is_empty() || sent.sent.is_empty() {
+            return Err(anyhow!("private payment list delivery failed: {} failed, {} sent", sent.failed.len(), sent.sent.len()).into());
+        }
+        private = json!({ "sent": sent.sent.len(), "entries": app.private_details(withheld).len() });
+    }
+    Ok(Json(json!({
+        "withheld": withheld,
+        "public": { "published": published.published.len(), "failed": published.failed.len() },
+        "private_payment_list": private,
+    })))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let app = Arc::new(setup().await?);
@@ -622,6 +682,7 @@ async fn main() -> Result<()> {
         .route("/pay", post(pay))
         .route("/proof", post(proof))
         .route("/withdraw", post(withdraw))
+        .route("/endpoints", get(endpoints_state).post(endpoints))
         .with_state(app);
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
     axum::serve(listener, router).await?;
