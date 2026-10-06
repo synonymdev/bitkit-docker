@@ -241,5 +241,10 @@ it reads `not_observable`: the fixture holds no key for the app's end of the lin
   setup with the current pin has been run headlessly (`seed` and `verify`) and not yet against an app. The
   Bitkit seller path (`seller-auth`, `purchase --seller bitkit`) has a headless self-test,
   `verify-bitkit-seller`, and has not been run against an app yet.
+- **Paykit Server on paykit-rs rc62.** Paykit Server master (9bc49d8f, locks-core rc8) still depends on paykit-rs rc59, while the apps use rc62: with the
+  rc59 build (`af0151a`) the setup completion of an rc62 app stops at `app_publish` (class `storage`, HTTP 422). Changing the paykit-rs tags of its
+  `Cargo.toml` to `v0.1.0-rc62` compiles with no code change (`cargo build --release -p paykit-server`). The QA boxes run that build as the loaded image
+  `bitkit-docker/paykit-server:master-rc62` (the `af0151a` image with its `paykit-server` binary replaced); the pinned source build above still produces rc59
+  until the upstream tags move.
 - **Fixed container names.** The base services keep their fixed container names, so another checkout's
   stack with the same names must be removed first.
