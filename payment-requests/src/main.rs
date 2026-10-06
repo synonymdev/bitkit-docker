@@ -19,7 +19,7 @@ use paykit_lib::{
     PaymentRequestId, PaymentRequestTerms, Recurrence, RecurrenceConfig, RecurrenceUnit,
 };
 use paykit_sdk::{
-    PubkySharedStateStorage, LinkedPeerState, PaykitAppCapabilities, PaykitAppId, PaykitApp, PaykitSdk,
+    PubkySharedStateStorage, StorageAdapter, LinkedPeerState, PaykitAppCapabilities, PaykitAppId, PaykitApp, PaykitSdk,
     PaykitSdkConfig, PaymentAdapter, PaymentRequestLifecycleState, PubkyLocalSecretKey,
     PubkyPublicKey, PubkySessionAccess, PubkySessionBootstrap, PubkySessionProvider,
     PAYKIT_AUTHORIZER_SESSION_CAPABILITIES,
@@ -64,6 +64,8 @@ type FixtureSdk = PaykitSdk<PubkySharedStateStorage, SessionProvider, FixturePay
 
 struct App {
     sdk: FixtureSdk,
+    // the SDK's own storage, to give a proposal the id a journey names (see `issue`)
+    storage: PubkySharedStateStorage,
     pubky: PubkyPublicKey,
     receiver_path: PaykitAppId,
     address: String,
@@ -99,6 +101,10 @@ struct RequestInput {
     peer: Peer,
     amount_sats: u64,
     reference: String,
+    // the id a journey names for its request (the issuer contract of the Bitkit journeys: `71300000-0000-4000-8000-000000000001`); a random one without it
+    payment_request_id: Option<String>,
+    // a request with no deadline
+    no_deadline: Option<bool>,
     deadline_at: Option<String>,
     monthly_starts_at: Option<String>,
     period_start_deadline_seconds: Option<u64>,
@@ -182,7 +188,9 @@ where
 
 async fn setup() -> Result<App> {
     let role = env::var("FIXTURE_ROLE").context("FIXTURE_ROLE is required")?;
-    let receiver_path = PaykitAppId::new(env::var("APP_ID").unwrap_or_else(|_| "qa-fixture".into()))?;
+    // the issuer contract of the Bitkit journeys: the fixture issuer's App ID is `paykit-server`
+    let default_app_id = if role == "fixture-issuer" { "paykit-server" } else { "qa-fixture" };
+    let receiver_path = PaykitAppId::new(env::var("APP_ID").unwrap_or_else(|_| default_app_id.into()))?;
     let pubky = Pubky::testnet()?;
     let bootstrap = PubkySessionBootstrap::with_pubky(pubky, "bitkit-docker.fixture")?
         .with_auth_relay("http://localhost:15412/inbox")?;
@@ -204,8 +212,9 @@ async fn setup() -> Result<App> {
     })
     .await?;
     let provider = SessionProvider(Arc::new(Mutex::new(Some(signed_up.access))));
+    let storage = PubkySharedStateStorage::new(provider.clone());
     let sdk = PaykitSdk::new(
-        PubkySharedStateStorage::new(provider.clone()),
+        storage.clone(),
         provider,
         FixturePaymentAdapter,
         config,
@@ -256,6 +265,7 @@ async fn setup() -> Result<App> {
     }
     Ok(App {
         sdk,
+        storage,
         pubky: signed_up.public_key,
         receiver_path,
         address,
@@ -338,6 +348,7 @@ async fn issue(State(app): State<Arc<App>>, Json(input): Json<RequestInput>) -> 
         PaymentReference::new(input.reference)?,
         vec![PaymentEndpointIdentifier::new(ENDPOINT)?],
     );
+    let fixed_id = input.payment_request_id;
     let terms = if let Some(start) = input.monthly_starts_at {
         let recurrence = Recurrence::try_from(RecurrenceConfig {
             every: 1,
@@ -351,6 +362,8 @@ async fn issue(State(app): State<Arc<App>>, Json(input): Json<RequestInput>) -> 
             .payment_deadline(Some(PaymentDeadline::PeriodStart {
                 seconds: input.period_start_deadline_seconds.unwrap_or(86_400),
             }))
+    } else if input.no_deadline.unwrap_or(false) {
+        terms
     } else {
         let deadline = input.deadline_at.unwrap_or_else(|| {
             (now + Duration::days(7)).to_rfc3339_opts(SecondsFormat::Secs, true)
@@ -370,10 +383,32 @@ async fn issue(State(app): State<Arc<App>>, Json(input): Json<RequestInput>) -> 
             }],
         )
         .await?;
-    let record = app
+    let mut record = app
         .sdk
         .propose_payment_request(peer.clone(), terms.build()?)
         .await?;
+    if let Some(fixed) = fixed_id {
+        // the SDK names a proposal itself; the queued message is given the id the journey names before it goes out
+        PaymentRequestId::new(fixed.clone())?;
+        let generated = record.payment_request_id.clone();
+        let counterparty = peer.clone();
+        let replacement = fixed.clone();
+        app.storage
+            .transaction(move |tx| {
+                let mut message = tx
+                    .queued_outbound_private_messages(&counterparty)
+                    .into_iter()
+                    .find(|message| message.raw_json.contains(&generated))
+                    .ok_or_else(|| paykit_sdk::PaykitSdkError::Protocol {
+                        context: "fixture proposal not queued".into(),
+                        source: None,
+                    })?;
+                message.raw_json = message.raw_json.replace(&generated, &replacement);
+                tx.save_outbound_private_message(message)
+            })
+            .await?;
+        record.payment_request_id = fixed;
+    }
     let sent = app
         .sdk
         .process_outbound_private_messages(peer)
