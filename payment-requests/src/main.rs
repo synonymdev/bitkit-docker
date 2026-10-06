@@ -19,7 +19,7 @@ use paykit_lib::{
     PaymentRequestId, PaymentRequestTerms, Recurrence, RecurrenceConfig, RecurrenceUnit,
 };
 use paykit_sdk::{
-    InMemoryStorage, LinkedPeerState, PaykitAppCapabilities, PaykitAppId, PaykitApp, PaykitSdk,
+    PubkySharedStateStorage, LinkedPeerState, PaykitAppCapabilities, PaykitAppId, PaykitApp, PaykitSdk,
     PaykitSdkConfig, PaymentAdapter, PaymentRequestLifecycleState, PubkyLocalSecretKey,
     PubkyPublicKey, PubkySessionAccess, PubkySessionBootstrap, PubkySessionProvider,
     PAYKIT_AUTHORIZER_SESSION_CAPABILITIES,
@@ -60,7 +60,7 @@ struct FixturePaymentAdapter;
 #[async_trait]
 impl PaymentAdapter for FixturePaymentAdapter {}
 
-type FixtureSdk = PaykitSdk<InMemoryStorage, SessionProvider, FixturePaymentAdapter>;
+type FixtureSdk = PaykitSdk<PubkySharedStateStorage, SessionProvider, FixturePaymentAdapter>;
 
 struct App {
     sdk: FixtureSdk,
@@ -88,6 +88,8 @@ impl Peer {
 struct LinkInput {
     #[serde(flatten)]
     peer: Peer,
+    #[serde(default)]
+    #[allow(dead_code)]
     mode: String,
 }
 
@@ -203,7 +205,7 @@ async fn setup() -> Result<App> {
     .await?;
     let provider = SessionProvider(Arc::new(Mutex::new(Some(signed_up.access))));
     let sdk = PaykitSdk::new(
-        InMemoryStorage::default(),
+        PubkySharedStateStorage::new(provider.clone()),
         provider,
         FixturePaymentAdapter,
         config,
@@ -273,11 +275,9 @@ async fn info(State(app): State<Arc<App>>) -> ApiResult {
 async fn link(State(app): State<Arc<App>>, Json(input): Json<LinkInput>) -> ApiResult {
     let _guard = app.operation.lock().await;
     let peer = input.peer.parsed()?;
-    let report = match input.mode.as_str() {
-        "initiate" => app.sdk.initiate_link_with_peer(peer).await?,
-        "accept" => app.sdk.accept_link_with_peer(peer).await?,
-        _ => return Err(anyhow!("mode must be initiate or accept").into()),
-    };
+    // the canonical link flow of the SDK (`initiate` and `accept` are one call: whichever side starts, it drives the handshake on); `mode` is kept in the
+    // request for the testers that still send it and is not read
+    let report = app.sdk.ensure_link_with_peer(peer, 1).await?;
     Ok(Json(serde_json::to_value(report)?))
 }
 
@@ -290,7 +290,7 @@ async fn sync_locked(app: &App, peer: PubkyPublicKey) -> Result<Value> {
         .find(|item| item.counterparty == peer);
     let state = current.context("link not started")?.state;
     if state == LinkedPeerState::Linking {
-        let report = app.sdk.advance_link_handshake(peer).await?;
+        let report = app.sdk.ensure_link_with_peer(peer, 1).await?;
         return Ok(json!({ "link": report }));
     }
     if state != LinkedPeerState::Linked {
@@ -421,6 +421,7 @@ async fn act(State(app): State<Arc<App>>, action: &'static str, input: RecordInp
                 .await?
         }
         "cancel" => {
+            app.sdk.claim_payment_request_for_execution(peer.clone(), &id).await?;
             app.sdk
                 .cancel_payment_request(peer.clone(), &id, None)
                 .await?
