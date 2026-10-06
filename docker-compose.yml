@@ -506,10 +506,10 @@ services:
       - ./.marketplace/evidence:/evidence
     entrypoint: ["node", "/app/driver.mjs"]
 
-  # The rc62 SDK peers share the marketplace testnet namespace and regtest chain. The service name `rc56-peer` stays: lanes and journeys address the peer by it.
+  # The rc64 SDK peers share the marketplace testnet namespace and regtest chain. The service name `rc56-peer` stays: lanes and journeys address the peer by it.
   fixture-issuer:
     profiles: [payment-requests]
-    image: bitkit-docker/payment-request-fixture:rc62-shared
+    image: bitkit-docker/payment-request-fixture:rc64-shared
     build: ./payment-requests
     restart: "no"
     network_mode: service:pubky-testnet
@@ -523,7 +523,7 @@ services:
 
   rc56-peer:
     profiles: [payment-requests]
-    image: bitkit-docker/payment-request-fixture:rc62-shared
+    image: bitkit-docker/payment-request-fixture:rc64-shared
     build: ./payment-requests
     restart: "no"
     network_mode: service:pubky-testnet
