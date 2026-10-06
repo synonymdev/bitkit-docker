@@ -430,7 +430,8 @@ services:
       - "127.0.0.1:15411:15411" # PKARR relay
       - "127.0.0.1:15412:15412" # HTTP relay
       - "127.0.0.1:6286:6286" # homeserver ICANN HTTP
-      - "127.0.0.1:6287:6287" # homeserver Pubky TLS
+      - "127.0.0.1:6287:6297" # homeserver Pubky TLS, through homeserver-proxy (in-namespace clients reach the homeserver on 6287 directly)
+      - "127.0.0.1:6298:6298" # homeserver-proxy control: delay or fail one identity's requests
       - "127.0.0.1:${MARKETPLACE_HOMESERVER_ADMIN_PORT:-16288}:6288" # homeserver admin (6288 is homegate's)
       - "127.0.0.1:${MARKETPLACE_PAYKIT_PORT:-3001}:3001" # paykit-server, shares this namespace
       - "127.0.0.1:3012:3012" # opt-in fixture-issuer, shares this namespace
@@ -505,6 +506,19 @@ services:
       - marketplace_state:/state
       - ./.marketplace/evidence:/evidence
     entrypoint: ["node", "/app/driver.mjs"]
+
+  # Pubky TLS proxy in front of the testnet homeserver: the apps reach the homeserver through it (the host's 6287 above).
+  # It presents the static testnet's homeserver key and forwards to the homeserver's plain HTTP on 6286; its control port
+  # (6298) delays or fails the requests of one identity and path (README, Homeserver proxy). Without rules it only forwards.
+  homeserver-proxy:
+    profiles: [marketplace]
+    image: bitkit-docker/payment-request-fixture:rc64-shared
+    build: ./payment-requests
+    restart: on-failure
+    network_mode: service:pubky-testnet
+    depends_on:
+      - pubky-testnet
+    entrypoint: ["/usr/local/bin/homeserver-proxy"]
 
   # The rc64 SDK peers share the marketplace testnet namespace and regtest chain. The service name `rc56-peer` stays: lanes and journeys address the peer by it.
   fixture-issuer:

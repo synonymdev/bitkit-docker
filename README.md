@@ -311,6 +311,60 @@ command does not populate a separate Bitkit identity's history; accepted and
 paid app rows require the lane's controlled client to prepare those records
 with the app's identity or an app build that supports importing fixture state.
 
+##### Withholding the issuer's endpoints
+
+A journey that needs the app's request resolution to fail (for example
+`requested-resolution-failure.xml`) withholds the issuer's payment endpoints
+before it sends the request, then restores them:
+
+```bash
+TO_APP=$(jq -nc --arg pubky "$APP_PUBKY" '{peer_pubky:$pubky,peer_path:"bitkit/wallet"}')
+curl -fsS -X POST http://127.0.0.1:3012/endpoints -H 'content-type: application/json' \
+  -d "$(jq -c '. + {action:"withhold"}' <<<"$TO_APP")" | jq
+curl -fsS -X POST http://127.0.0.1:3012/request -H 'content-type: application/json' \
+  -d "$(jq -c '. + {amount_sats:15000,reference:"unresolvable"}' <<<"$TO_APP")" | jq
+# ... the app retries and shows "The payment request is no longer available." ...
+curl -fsS -X POST http://127.0.0.1:3012/endpoints -H 'content-type: application/json' \
+  -d "$(jq -c '. + {action:"restore"}' <<<"$TO_APP")" | jq
+curl -fsS http://127.0.0.1:3012/endpoints | jq   # {"withheld": false, ...}
+```
+
+`withhold` removes the issuer's public `btc-regtest-p2wpkh` endpoint and sends
+the named peer an empty private payment list. While withheld, `/request` sends
+its request with that empty list, so the request names an endpoint the app
+cannot resolve (`"endpoints_withheld": true` in its answer). `restore`
+publishes the endpoint again and sends the peer the full list; the app's next
+attempt resolves it. Without `peer_pubky`, only the public endpoint changes.
+
+#### Homeserver proxy (selective delay)
+
+The apps reach the testnet homeserver through `homeserver-proxy`, which the
+marketplace profile starts with the testnet: the host's 6287 (Pubky TLS) goes
+to it, it presents the static testnet's homeserver key (secret `[0; 32]`) and
+forwards every request to the homeserver's plain HTTP on 6286. Clients inside
+the testnet's namespace (Paykit Server, the payment request peers) still reach
+the homeserver on 6287 directly. Without rules the proxy only forwards.
+
+Its control port, 6298, delays or fails the requests of one identity whose
+owner-relative path starts with `path` (empty matches every path):
+
+```bash
+# hold one identity's own-profile reads for 20 s
+curl -fsS -X POST http://127.0.0.1:6298/rules -H 'content-type: application/json' \
+  -d "$(jq -nc --arg pubky "$APP_PUBKY" '{pubky:$pubky,path:"/pub/pubky.app/profile.json",delay_ms:20000}')" | jq
+# fail them instead (after an optional delay): add "status": 503
+curl -fsS http://127.0.0.1:6298/rules | jq
+curl -fsS http://127.0.0.1:6298/requests | jq '.requests[-20:]'   # owner, path, status, delayed_ms of recent requests
+curl -fsS -X DELETE http://127.0.0.1:6298/rules | jq             # remove every rule
+```
+
+A rule with the same `pubky` and `path` replaces the earlier one. `pubky`
+takes the z32 key with or without its `pubky` prefix. `/requests` lists the
+last 200 requests, which shows the paths an app reads for an identity;
+`docker compose logs homeserver-proxy` prints the same lines. Set rules before
+the app makes the request: a held request waits on its open connection, and
+requests that reach the homeserver before the rule are not held.
+
 #### Trezor Hardware PRs
 
 For isolated Linux or Docker-backed simulator projects, use the optional

@@ -20,7 +20,7 @@ SOURCES=.marketplace/sources
 PAYKIT_PORT="${MARKETPLACE_PAYKIT_PORT:-3001}"
 COMPOSE=(docker compose --profile marketplace)
 CHAIN_SERVICES=(bitcoind bitcoinsetup electrs)
-FIXTURE_SERVICES=(marketplace-postgres pubky-testnet paykit-server)
+FIXTURE_SERVICES=(marketplace-postgres pubky-testnet homeserver-proxy paykit-server)
 # Opt-in payment request peers (README, Payment Request fixture). They share the testnet's network namespace.
 PEER_SERVICES=(fixture-issuer rc56-peer)
 
@@ -151,11 +151,12 @@ build() {
   fetch_sources
   compose build pubky-testnet paykit-server
   compose build marketplace-driver
+  compose build homeserver-proxy
 }
 
 images_present() {
   docker image inspect bitkit-docker/pubky-testnet:0.14.0 bitkit-docker/paykit-server:af0151a \
-    bitkit-docker/marketplace-driver:0.14.0 >/dev/null 2>&1
+    bitkit-docker/marketplace-driver:0.14.0 bitkit-docker/payment-request-fixture:rc64-shared >/dev/null 2>&1
 }
 
 wait_ready() {
@@ -179,7 +180,7 @@ up() {
     build
   fi
   progress "starting the chain, Postgres and the Pubky testnet"
-  compose up -d "${CHAIN_SERVICES[@]}" marketplace-postgres pubky-testnet
+  compose up -d "${CHAIN_SERVICES[@]}" marketplace-postgres pubky-testnet homeserver-proxy
   progress "initializing the driver state"
   driver init
   progress "starting Paykit Server"

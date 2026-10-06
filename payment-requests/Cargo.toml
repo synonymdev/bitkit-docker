@@ -11,7 +11,9 @@ chrono = "0.4"
 paykit-lib = { git = "https://github.com/pubky/paykit-rs.git", rev = "27fa6ed181d9fc428a6e2854f884c699a524dbc6" }
 paykit-sdk = { git = "https://github.com/pubky/paykit-rs.git", rev = "27fa6ed181d9fc428a6e2854f884c699a524dbc6" }
 pubky = "=0.14.0"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+pkarr = { version = "8.1", features = ["tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }

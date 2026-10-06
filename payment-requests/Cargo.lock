@@ -269,11 +269,13 @@ dependencies = [
  "chrono",
  "paykit-lib",
  "paykit-sdk",
+ "pkarr",
  "pubky",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]

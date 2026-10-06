@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Withhold and restore the payment request issuer's endpoints with `POST /endpoints`, so a journey can make the app's request resolution fail and recover
+- Route the apps' homeserver traffic through `homeserver-proxy`, whose control port (6298) delays or fails one identity's homeserver requests by path
+
 ### Changed
 - Move the payment request fixture peers to paykit-rs rc62 on Pubky 0.14.0, the SDK current Bitkit builds use (the `fixture-issuer` and `rc56-peer` service names stay)
 - Move the marketplace fixture to the Pubky 0.14.0 homeserver, which grants the `LOCK` write locks current Bitkit builds take, with Paykit Server `af0151a` (paykit-rs rc59) and the driver on `@synonymdev/pubky` 0.14.0
