@@ -31,6 +31,8 @@ use tokio::sync::Mutex;
 
 const HOMESERVER: &str = "pubky8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo";
 const ENDPOINT: &str = "btc-regtest-p2wpkh";
+// the identifier Bitkit reads an LNURL-pay endpoint from (`MethodId.Lnurl`)
+const LNURL_ENDPOINT: &str = "btc-lightning-lnurl";
 
 #[derive(Clone)]
 struct SessionProvider(Arc<Mutex<Option<PubkySessionAccess>>>);
@@ -74,6 +76,8 @@ struct App {
     operation: Mutex<()>,
     // `/endpoints` withhold: no public endpoint and an empty private payment list, so an app cannot resolve the request's endpoint
     withheld: Mutex<bool>,
+    // the LNURL-pay endpoint the last `/request` named (`lnurl`): offered beside the regtest address from then on
+    lnurl: std::sync::Mutex<Option<String>>,
 }
 
 impl App {
@@ -82,10 +86,14 @@ impl App {
         if withheld {
             return vec![];
         }
-        vec![paykit_sdk::PrivateReceivingDetail {
+        let mut details = vec![paykit_sdk::PrivateReceivingDetail {
             identifier: ENDPOINT.into(),
             payload: json!({ "value": self.address }).to_string(),
-        }]
+        }];
+        if let Some(lnurl) = self.lnurl.lock().unwrap().clone() {
+            details.push(paykit_sdk::PrivateReceivingDetail { identifier: LNURL_ENDPOINT.into(), payload: json!({ "value": lnurl }).to_string() });
+        }
+        details
     }
 }
 
@@ -123,6 +131,11 @@ struct RequestInput {
     deadline_at: Option<String>,
     monthly_starts_at: Option<String>,
     period_start_deadline_seconds: Option<u64>,
+    // an LNURL-pay string (`GET :3010/generate/pay` of the lane's LNURL fixture): the request then accepts only `btc-lightning-lnurl`,
+    // which the private payment list sent with it offers (bitkit-android#1401 J19, 7 Oct)
+    lnurl: Option<String>,
+    // when the proposal itself expires (the acceptance deadline), apart from the payment deadline
+    proposal_expires_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -174,6 +187,21 @@ async fn rpc(method: &str, params: Value) -> Result<Value> {
         bail!("bitcoind {method}: {}", response["error"]);
     }
     Ok(response["result"].clone())
+}
+
+/// Mines to this wallet until it can send `sats` and a fee: a seat's chain starts at one block, whose coinbase is immature, so
+/// `/pay` failed with bitcoind's "Insufficient funds" (bitkit-android#1401 J14, 7 Oct). Regtest halves the subsidy every 150 blocks,
+/// so a long chain may need more than one round of 101 blocks.
+async fn fund(sats: u64) -> Result<()> {
+    let needed = sats as f64 / 100_000_000.0 + 0.001;
+    for _ in 0..5 {
+        if rpc("getbalance", json!([])).await?.as_f64().unwrap_or(0.0) >= needed {
+            return Ok(());
+        }
+        let address = rpc("getnewaddress", json!(["", "bech32"])).await?;
+        rpc("generatetoaddress", json!([101, address])).await?;
+    }
+    bail!("the fixture wallet holds less than {needed} BTC after mining 505 blocks")
 }
 
 /// Retries a step that depends on the Pubky testnet or bitcoind, which may still be starting when this
@@ -287,6 +315,7 @@ async fn setup() -> Result<App> {
         role,
         operation: Mutex::new(()),
         withheld: Mutex::new(false),
+        lnurl: std::sync::Mutex::new(None),
     })
 }
 
@@ -294,7 +323,7 @@ async fn info(State(app): State<Arc<App>>) -> ApiResult {
     Ok(Json(json!({
         "status": "ready", "role": app.role, "pubky": app.pubky.to_app_key(),
         "receiver_path": app.receiver_path.as_str(), "endpoint": ENDPOINT,
-        "address": app.address,
+        "address": app.address, "lnurl": app.lnurl.lock().unwrap().clone(),
     })))
 }
 
@@ -362,8 +391,15 @@ async fn issue(State(app): State<Arc<App>>, Json(input): Json<RequestInput>) -> 
             "btc",
         )?,
         PaymentReference::new(input.reference)?,
-        vec![PaymentEndpointIdentifier::new(ENDPOINT)?],
-    );
+        vec![PaymentEndpointIdentifier::new(if input.lnurl.is_some() { LNURL_ENDPOINT } else { ENDPOINT })?],
+    )
+    .proposal_expires_at(input.proposal_expires_at);
+    if let Some(lnurl) = input.lnurl {
+        if !lnurl.to_ascii_lowercase().starts_with("lnurl1") {
+            return Err(anyhow!("lnurl must be a bech32 LNURL (lnurl1...)").into());
+        }
+        *app.lnurl.lock().unwrap() = Some(lnurl);
+    }
     let fixed_id = input.payment_request_id;
     let terms = if let Some(start) = input.monthly_starts_at {
         let recurrence = Recurrence::try_from(RecurrenceConfig {
@@ -561,6 +597,7 @@ async fn pay_impl(app: Arc<App>, input: PayInput, existing_tx: bool) -> ApiResul
         if input.txid.is_some() {
             return Err(anyhow!("use /proof to retry an existing transaction").into());
         }
+        fund(input.amount_sats).await?;
         rpc(
             "sendtoaddress",
             json!([input.address, input.amount_sats as f64 / 100_000_000.0]),
