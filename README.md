@@ -12,7 +12,7 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
 - **VSS Server**: Versioned Storage Server for app and ldk-node state backups
 - **Homegate**: Pubky Homeserver signup gatekeeper with local admin API mock
 - **Pubky marketplace fixture** (opt-in `marketplace` profile): Pubky testnet, Paykit Server and a purchase driver for the marketplace wallet journey
-- **Payment Request fixture** (opt-in `payment-requests` profile): rc56 issuer and controlled peer on the marketplace Pubky testnet
+- **Payment Request fixture** (opt-in `payment-requests` profile): rc65 issuer and controlled peer on the marketplace Pubky testnet
 
 ## Quick Start
 
@@ -94,6 +94,18 @@ docker compose --profile lnurl-pay exec -T lnurl-server-fixture node --test pay-
 ```
 
 Use the address and forwarded port reachable by the wallet when requesting `/generate/pay` or `/pay/fixture`: the response derives its URLs from the request's host, including any remapped port. Set `LNURL_FIXTURE_DOMAIN` before starting the service if the wallet must use a different origin (for example `http://10.0.2.2:3010` for an Android emulator).
+
+`{"mode":"delay","ms":N}` holds every callback for `N` milliseconds and then answers with an invoice; without `ms` a callback waits until the next `POST /fixture`, which releases it with that request's mode (`healthy` for an invoice, `error` for an error). A callback is held for 15 minutes at most. `GET /fixture` lists the callbacks with how long each was held and what it answered, and `GET /fixture/invoices` lists the issued invoices with `settled` from LND, so a journey can check that a wallet did not pay after its deadline.
+
+The profile starts the project's LND beside the fixture, and invoices are real invoices of that LND. To make them payable from a wallet, give it a channel: `GET /generate/channel` returns an LNURL-channel; when the wallet accepts it, LND (funded on the project's bitcoind first when it holds too little) opens a 1,000,000 sat static-remote-key channel that pushes 500,000 sat to the wallet, and mines six blocks to confirm it (`CHANNEL_SATS` and `PUSH_SATS` change the amounts). Ask `/generate/pay` and `/generate/channel` with a `Host` header naming the address the wallet dials (`-H 'Host: 127.0.0.1:3010'` for an Android emulator mapped with `adb reverse`) when you reach the fixture on another port: the encoded LNURL takes its origin from that header. The wallet dials LND at `LND_P2P_ADDRESS` (default `127.0.0.1:9735`, which an Android emulator reaches through `adb reverse tcp:9735 tcp:<published port>`). `GET /fixture/channels` shows LND's open and pending channels, and `POST /fixture/mine` with `{"blocks":N}` mines more blocks.
+
+```bash
+curl -fsS http://localhost:3010/generate/channel | jq -r .lnurl   # paste or scan in the wallet, then accept the connection
+curl -fsS http://localhost:3010/fixture/channels | jq '.open[] | {remote_pubkey, capacity, local_balance, remote_balance, active}'
+curl -fsS -X POST http://localhost:3010/fixture -H 'Content-Type: application/json' -d '{"mode":"delay"}'   # hold the next callbacks
+curl -fsS -X POST http://localhost:3010/fixture -H 'Content-Type: application/json' -d '{"mode":"healthy"}' # release them with invoices
+curl -fsS http://localhost:3010/fixture/invoices | jq
+```
 
 Healthy invoices use the requested amount in millisatoshis and bind the exact metadata with a SHA-256 description hash. They are signed, freshly generated `lnbcrt` invoices with a one-hour expiry and payment secret. This fixture supports invoice fetching, decoding and callback retry journeys; it has no Lightning node or channels and cannot settle payments. Use the regular LNURL server with LND for actual payments. Its controls are unauthenticated and intended only for disposable local test environments.
 
@@ -239,9 +251,9 @@ docker compose logs -f bitcoind
 
 ### Bitkit Testing
 
-#### Payment Requests and rc56 Deadline History
+#### Payment Requests and Deadline History
 
-The `payment-requests` profile starts two disposable Paykit rc56 SDK peers on
+The `payment-requests` profile starts two disposable Paykit rc65 SDK peers (paykit-rs `7185ae7`, Pubky 0.14.0) on
 the marketplace fixture's Pubky testnet. `fixture-issuer` publishes a regtest
 Paykit endpoint and sends one-time requests. `rc56-peer` can accept, reject,
 cancel and pay requests through the shared regtest Bitcoin node. Plain
@@ -291,6 +303,12 @@ rejected or canceled records, issue another request and call `/reject` or
 `POST /request` accepts `monthly_starts_at` (UTC RFC3339) and
 `period_start_deadline_seconds`; `/pay` then needs
 `billing_period_start` and `billing_period_end`.
+`POST /request` also accepts `proposal_expires_at` (UTC RFC3339, the
+acceptance deadline, apart from the payment deadline) and `lnurl`, an LNURL-pay
+string such as the LNURL fixture's `GET /generate/pay`: the request then
+accepts only `btc-lightning-lnurl`, which the private payment list sent with it
+offers beside the regtest address. `/pay` funds the issuer's bitcoind wallet by
+mining to it when it holds less than the payment and a fee.
 
 Example one-time issuance to a linked app after both sides report `Linked`:
 
@@ -305,12 +323,85 @@ Pubky testnet's network namespace, so `./pubky-marketplace down` and `reset`
 remove them together with the testnet. After `reset`, start them again with the
 `up -d --no-build fixture-issuer rc56-peer` command above, wait for `/health`,
 rerun `payment-requests/prepare` and relink the app. `./pubky-marketplace seed`
-needs outbound internet for Paykit Server setup; the rc56 peer calls use the
+needs outbound internet for Paykit Server setup; the rc65 peer calls use the
 local testnet. The lane still needs a Bitkit build pointed at the local Pubky
 testnet and to verify the requested rows on device. The headless preparation
 command does not populate a separate Bitkit identity's history; accepted and
 paid app rows require the lane's controlled client to prepare those records
 with the app's identity or an app build that supports importing fixture state.
+
+##### Withholding the issuer's endpoints
+
+A journey that needs the app's request resolution to fail (for example
+`requested-resolution-failure.xml`) withholds the issuer's payment endpoints
+before it sends the request, then restores them:
+
+```bash
+TO_APP=$(jq -nc --arg pubky "$APP_PUBKY" '{peer_pubky:$pubky,peer_path:"bitkit/wallet"}')
+curl -fsS -X POST http://127.0.0.1:3012/endpoints -H 'content-type: application/json' \
+  -d "$(jq -c '. + {action:"withhold"}' <<<"$TO_APP")" | jq
+curl -fsS -X POST http://127.0.0.1:3012/request -H 'content-type: application/json' \
+  -d "$(jq -c '. + {amount_sats:15000,reference:"unresolvable"}' <<<"$TO_APP")" | jq
+# ... the app retries and shows "The payment request is no longer available." ...
+curl -fsS -X POST http://127.0.0.1:3012/endpoints -H 'content-type: application/json' \
+  -d "$(jq -c '. + {action:"restore"}' <<<"$TO_APP")" | jq
+curl -fsS http://127.0.0.1:3012/endpoints | jq   # {"withheld": false, ...}
+```
+
+`withhold` removes the issuer's public `btc-regtest-p2wpkh` endpoint and sends
+the named peer an empty private payment list. While withheld, `/request` sends
+its request with that empty list, so the request names an endpoint the app
+cannot resolve (`"endpoints_withheld": true` in its answer). `restore`
+publishes the endpoint again and sends the peer the full list; the app's next
+attempt resolves it. Without `peer_pubky`, only the public endpoint changes.
+
+#### Following the apps' Paykit pin
+
+The Paykit fixtures must run the paykit-rs version the app under test pins: the payment request peers
+(`payment-request-fixture:rc65-shared`, paykit-rs `7185ae7`, v0.1.0-rc65) and Paykit Server (built from
+the head of [pubky/paykit-server#46](https://github.com/pubky/paykit-server/pull/46), `0ffd4da`, until it
+merges or is released). Each image records the paykit-rs commit it was built from (label
+`tech.masivo.paykit-rs`, or `/usr/local/share/paykit-rs-rev` in the peers' image).
+
+```bash
+scripts/follow-app-paykit synonymdev/bitkit-android 1401 --check   # print the pin and what is out of date (exit 3)
+scripts/follow-app-paykit synonymdev/bitkit-ios a6846779a71081f262f47883570125bd541b4fd6
+```
+
+It reads the pin at the PR head (Android `gradle/libs.versions.toml`, iOS `Package.resolved`), rebuilds the
+peers' image as `payment-request-fixture:<rc>-shared` when it was built from another commit, and builds
+Paykit Server and the driver from the Paykit Server PR the app PR links (its merge commit once merged),
+else from master, when that revision locks the same paykit-rs tag (exit 4 when none does). Afterwards every
+tag Compose resolves for those images, `COMPOSE_FILE` overrides included, points at the new build.
+
+#### Homeserver proxy (selective delay)
+
+The apps reach the testnet homeserver through `homeserver-proxy`, which the
+marketplace profile starts with the testnet: the host's 6287 (Pubky TLS) goes
+to it, it presents the static testnet's homeserver key (secret `[0; 32]`) and
+forwards every request to the homeserver's plain HTTP on 6286. Clients inside
+the testnet's namespace (Paykit Server, the payment request peers) still reach
+the homeserver on 6287 directly. Without rules the proxy only forwards.
+
+Its control port, 6298, delays or fails the requests of one identity whose
+owner-relative path starts with `path` (empty matches every path):
+
+```bash
+# hold one identity's own-profile reads for 20 s
+curl -fsS -X POST http://127.0.0.1:6298/rules -H 'content-type: application/json' \
+  -d "$(jq -nc --arg pubky "$APP_PUBKY" '{pubky:$pubky,path:"/pub/pubky.app/profile.json",delay_ms:20000}')" | jq
+# fail them instead (after an optional delay): add "status": 503
+curl -fsS http://127.0.0.1:6298/rules | jq
+curl -fsS http://127.0.0.1:6298/requests | jq '.requests[-20:]'   # owner, path, status, delayed_ms of recent requests
+curl -fsS -X DELETE http://127.0.0.1:6298/rules | jq             # remove every rule
+```
+
+A rule with the same `pubky` and `path` replaces the earlier one. `pubky`
+takes the z32 key with or without its `pubky` prefix. `/requests` lists the
+last 200 requests, which shows the paths an app reads for an identity;
+`docker compose logs homeserver-proxy` prints the same lines. Set rules before
+the app makes the request: a held request waits on its open connection, and
+requests that reach the homeserver before the rule are not held.
 
 #### Trezor Hardware PRs
 
@@ -458,7 +549,7 @@ Then, with the buyer wallet:
 
 Pay the request in the app, then confirm with `./pubky-marketplace mine --bundle <bundle>`, `./pubky-marketplace wait <bundle> confirmed` and `./pubky-marketplace status <bundle>`. By default the seller of a purchase is the fixture's headless seller, and `verify` always uses it.
 
-To make a Bitkit wallet the seller, the wallet approves two Pubky requests for the same identity: the Paykit watch-only setup (it gives Paykit Server the wallet's account xpub, so payouts land in that wallet) and a write grant on `/pub/locks.app/` (the role Locks plays: the driver publishes the payment lock with the granted session). One request cannot carry both, because the apps accept the watch-only claim only for exactly the two Paykit paths.
+To make a Bitkit wallet the seller, the wallet approves two Pubky requests for the same identity: the Paykit watch-only setup (it gives Paykit Server the wallet's account xpub, so payouts land in that wallet) and a write grant on `/pub/app.locks/` (the role Locks plays: the driver publishes the payment lock with the granted session). One request cannot carry both, because the apps accept the watch-only claim only for exactly the two Paykit paths.
 
 ```bash
 ./pubky-marketplace seed --buyer none            # once per fixture; the headless seller stays unused

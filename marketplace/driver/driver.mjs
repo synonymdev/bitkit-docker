@@ -8,7 +8,7 @@
 // without a wallet app: the seller (watch-only setup) and the buyer (receive
 // and pay). Bitkit wallets take the buyer and seller roles in the app journey.
 // A Bitkit seller approves two Pubky grants: the Paykit setup (`setup-url`) and
-// a `/pub/locks.app/` write grant for the marketplace (`seller-auth`), and the
+// a `/pub/app.locks/` write grant for the marketplace (`seller-auth`), and the
 // driver publishes the payment lock with that grant session.
 //
 // Secrets stay in /state/secrets (root, 0700). Paykit Server only ever sees the
@@ -43,7 +43,7 @@ const HEADLESS_CLIENT_ID = 'marketplace.fixture';
 // The write grant a Bitkit seller approves for the marketplace (the role Locks plays). The apps show the
 // client id as "Requester ID" and the path as the requested permission.
 const LOCKS_CLIENT_ID = 'locks.app';
-const LOCKS_CAPS = '/pub/locks.app/:rw';
+const LOCKS_CAPS = '/pub/app.locks/:rw';
 // The testnet's own HTTP relay; wallets reach it on localhost like the homeserver (Android: adb reverse 15412).
 const LOCKS_RELAY = 'http://localhost:15412/inbox/';
 const BITKIT_SESSION_SECRET = 'bitkit-seller.session';
@@ -51,6 +51,7 @@ const BITKIT_SESSION_SECRET = 'bitkit-seller.session';
 const STANDIN_ACCOUNT_INDEX = 1;
 const SERVER_PATH = 'bitkit/server';
 const BUYER_PATH = 'bitkit/wallet';
+const BUYER_APP_ID = 'bitkit';
 const ACCOUNT_INDEX = 0;
 const DEFAULT_SATS = 15000;
 const EXPECTED_ASSET = 'btc';
@@ -191,7 +192,9 @@ async function signedPost(path, body, { signature } = {}) {
   const text = canonical(body);
   const issuerSeed = Buffer.from(await readSecret('issuer.seed'), 'base64url');
   const headers = { 'content-type': 'application/json' };
-  const value = signature ?? b64url(sign(null, Buffer.from(text), keyFromSeed(issuerSeed)));
+  // Paykit Server signs requests over `paykit-http-signature-v1\0<METHOD>\0<path>\0<body>` (src/http/auth.rs, signature_preimage).
+  const preimage = Buffer.concat([Buffer.from(`paykit-http-signature-v1\0POST\0${path}\0`), Buffer.from(text)]);
+  const value = signature ?? b64url(sign(null, preimage, keyFromSeed(issuerSeed)));
   if (value !== 'none') headers['x-paykit-signature'] = value;
   const response = await fetch(`${PAYKIT_URL}${path}`, { method: 'POST', headers, body: text });
   const raw = await response.text();
@@ -243,7 +246,7 @@ async function signUpIdentity(seed) {
   return keypair.publicKey.toString();
 }
 
-// A write session on the seller's /pub/locks.app/, for publishing the payment lock. The headless seller signs
+// A write session on the seller's /pub/app.locks/, for publishing the payment lock. The headless seller signs
 // in with its own key. A Bitkit seller has no key here: the session is the grant its wallet approved in
 // `seller-auth`, restored from the state volume (each restore mints a fresh short-lived bearer).
 async function sellerSession(seller) {
@@ -290,9 +293,8 @@ function runHelper(binary, input, env = {}) {
 const readerEnv = (seller) => ({
   PAYKIT_READER_STATE_PATH: `${STATE}/reader/state.bin`,
   PAYKIT_READER_PUBKY_TESTNET_HOST: 'localhost',
-  PAYKIT_READER_RECEIVER_PATH: BUYER_PATH,
+  PAYKIT_READER_APP_ID: BUYER_APP_ID,
   PAYKIT_READER_SERVER_PUBKY: seller,
-  PAYKIT_READER_SERVER_PATH: SERVER_PATH,
 });
 
 // ------------------------------------------------------------------ encodings
@@ -345,8 +347,7 @@ allowed_origins = ["${SETUP_ORIGIN}"]
 
 [paykit]
 client_id = "${PAYKIT_CLIENT_ID}"
-receiver_path = "${SERVER_PATH}"
-receiver_path_priority = ["bitkit"]
+app_id = "paykit-server"
 network = "testnet"
 
 [bitcoin]
@@ -372,7 +373,7 @@ async function completeSetup(flowId, seconds = 120) {
     const response = await fetch(`${PAYKIT_URL}/setup/${flowId}/complete`, { method: 'POST' });
     if (response.status === 200) return;
     if (![408, 425, 429, 502, 503, 504].includes(response.status)) {
-      fail(`setup flow ended with HTTP ${response.status}`);
+      fail(`setup flow ended with HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
     }
     if (Date.now() > deadline) fail('setup flow did not complete in time');
     await sleep(1500);
@@ -409,12 +410,19 @@ async function beginSetup() {
 // The watch-only setup approval: the wallet's role in Paykit Server's /setup flow. The wallet gives the server
 // its account xpub with the companion claim, then approves the setup grant with its Pubky identity.
 async function approveSetupAs(authUrl, identitySeed, xpub, accountIndex) {
+  // Paykit Server rc65 checks the identity's Paykit noise key authorization before it accepts the claim; a wallet publishes it
+  // in its own Paykit setup, the headless identity publishes it here.
+  const authorized = await runHelper('paykit-key-authorization', { version: 1, creator_secret: b64url(identitySeed) });
+  if (authorized.code !== 0 || !authorized.stdout.includes('"published":true')) {
+    fail(`Paykit key authorization failed: ${authorized.stderr || authorized.stdout}`);
+  }
   const approval = await runHelper('paykit-companion-auth', {
     version: 1,
     auth_url: authUrl,
     creator_secret: b64url(identitySeed),
     account_xpub: xpub,
     account_index: accountIndex,
+    key_generation: 1,
   });
   if (approval.code !== 0 || !approval.stdout.includes('"approved"')) {
     fail(`companion approval failed: ${approval.stderr || approval.stdout}`);
@@ -478,7 +486,7 @@ async function createBuyer(sellerPubky) {
     { version: 1, operation: 'prepare', reader_secret: b64url(seed) },
     readerEnv(sellerPubky ?? fixture.seller.pubky),
   );
-  if (prepared.code !== 0) fail(`buyer receiver marker failed: ${prepared.stdout || prepared.stderr}`);
+  if (prepared.code !== 0) fail(`buyer receiver marker failed: ${[prepared.stdout, prepared.stderr].filter(Boolean).join(' ')}`);
   fixture.buyer = { pubky: buyer, receiver_path: BUYER_PATH, kind: 'headless' };
   await writeJson(FIXTURE_FILE, fixture);
   log(`headless buyer ready: ${buyer}`);
@@ -719,14 +727,15 @@ async function purchase(args) {
   const lock = lockFor({ seller: seller.pubky, sats, issuer: await issuerPubky() });
   const lockText = canonical(lock);
   const lockId = crockford(blake3(Buffer.from(lockText)));
-  const lockPath = `/pub/locks.app/${lockId}.json`;
+  const lockPath = `/pub/app.locks/${lockId}.json`;
   const session = await sellerSession(seller);
   await session.storage.putText(lockPath, lockText);
 
   const bundleId = newBundleId();
   const lockResource = `${seller.pubky}${lockPath}`;
   const response = await signedPost('/invoices', { bundle_id: bundleId, lock_resource: lockResource, reader });
-  if (response.status !== 204) {
+  // Paykit Server answers 200 with invoice_created_at and payment_deadline (204 with no body before the Locks payment window)
+  if (response.status !== 200 && response.status !== 204) {
     const code = response.json?.error?.code ? ` ${response.json.error.code}` : '';
     const hint =
       response.status === 503
@@ -748,6 +757,7 @@ async function purchase(args) {
     derived_address: seller.kind === 'headless' ? await expectedAddress(seller.account_xpub, childIndex) : null,
     child_index: seller.kind === 'headless' ? childIndex : null,
     created_at: new Date().toISOString(),
+    payment_deadline: response.json?.payment_deadline ?? null,
     state: 'created',
   };
   purchases.push(record);
@@ -783,7 +793,7 @@ async function receive(args) {
     { version: 1, operation: 'receive', reader_secret: seed },
     readerEnv(purchase.seller),
   );
-  if (result.code !== 0) fail(`receive failed: ${result.stdout || result.stderr}`);
+  if (result.code !== 0) fail(`receive failed: ${[result.stdout, result.stderr].filter(Boolean).join(' ')}`);
   const request = JSON.parse(result.stdout);
   // The pinned reader rejects any endpoint other than btc-regtest-p2wpkh and any
   // payload that is not a JSON object with a string value before it projects.
@@ -910,7 +920,7 @@ async function waitFor(args) {
 // It reads what the fixture can see: each side's public Paykit receiver marker, the seller's setup
 // authority, and Paykit Server's persisted peer state for a purchase's reader binding.
 async function receiverMarker(pubky, receiverPath) {
-  const path = `/pub/paykit/v0/${receiverPath}/receiver.json`;
+  const path = `/pub/paykit/v0/app-registry.json`;
   const storage = pubkyClient().publicStorage;
   if (!(await storage.exists(`${pubky}${path}`))) return { path, present: false };
   return { path, present: true, marker: await storage.getJson(`${pubky}${path}`) };
@@ -1056,7 +1066,8 @@ async function verify() {
   evidence.seller = { pubky: fixture.seller.pubky, account_xpub: fixture.seller.account_xpub, account_index: fixture.seller.account_index };
   evidence.buyer = { pubky: buyer.pubky };
 
-  const peersBefore = await capture('peers_before', () => peers([]));
+  // ask about this run's buyer: without --buyer the report follows the latest purchase, which an earlier verify left
+  const peersBefore = await capture('peers_before', () => peers(['--buyer', buyer.pubky]));
   if (!peersBefore.ready_for_purchase || peersBefore.linked) fail('before the purchase the peers must be ready for a purchase and not linked yet');
 
   const created = await capture('purchase', () => purchase(['--buyer', 'headless']));
@@ -1098,7 +1109,7 @@ async function verify() {
 const androidOpen = (authUrl, serial) =>
   `adb${serial ? ` -s ${serial}` : ''} shell "am start -a android.intent.action.VIEW -d '${authUrl}'"`;
 
-// The marketplace's request for a write grant on the seller's /pub/locks.app/, shown to the seller as a Pubky
+// The marketplace's request for a write grant on the seller's /pub/app.locks/, shown to the seller as a Pubky
 // auth request (the role Locks plays). The flow polls the relay as long as this process runs.
 async function startLocksGrant(relay) {
   const flow = await pubkyClient().startGrantAuthFlow(LOCKS_CAPS, AuthFlowKind.signin(), { clientId: LOCKS_CLIENT_ID, relay });
@@ -1123,7 +1134,7 @@ async function awaitGrant(flow, seconds) {
 const writesLocks = (capabilities) =>
   capabilities.some((cap) => {
     const at = cap.lastIndexOf(':');
-    return cap.slice(at + 1).includes('w') && '/pub/locks.app/'.startsWith(cap.slice(0, at));
+    return cap.slice(at + 1).includes('w') && '/pub/app.locks/'.startsWith(cap.slice(0, at));
   });
 
 // Keep the approved grant as the seller's write session and record the identity that approved it.

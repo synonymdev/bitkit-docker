@@ -93,8 +93,8 @@ sync_issuer
 
 canceled=$(issue rc56-canceled 13000)
 receive
-post 3012 /cancel "$(jq -nc --argjson peer "$to_peer" --arg id "$canceled" '$peer + {payment_request_id:$id}')" >/dev/null
-receive
+post 3013 /cancel "$(record "$canceled")" >/dev/null
+sync_issuer
 
 completed=$(issue rc56-completed 14000)
 receive

@@ -162,9 +162,19 @@ services:
     build:
       context: ./lnurl-server
       dockerfile: Dockerfile.pay-fixture
+    # real invoices of the project's LND (payable once `/channel/fixture` gave the wallet a channel), and `/fixture/mine` on its bitcoind
+    depends_on:
+      - lnd
+      - darkhttpd
     environment:
       PORT: '3010'
       LNURL_FIXTURE_DOMAIN: ${LNURL_FIXTURE_DOMAIN:-}
+      LND_REST_URL: https://lnd:8080
+      LND_DIR: /lnd
+      LND_P2P_ADDRESS: 127.0.0.1:9735
+      BITCOIN_RPC_URL: http://polaruser:polarpass@bitcoind:43782
+    volumes:
+      - ./lnd:/lnd:ro
     ports:
       - '3010:3010'
     healthcheck:
@@ -457,7 +467,9 @@ services:
   pubky-testnet:
     profiles: [marketplace]
     container_name: marketplace-pubky-testnet
-    image: bitkit-docker/pubky-testnet:f68014c1
+    # The homeserver of 0.14.0 answers the Pubky SDK's LOCK and UNLOCK write locks that current Bitkit builds take before writing Paykit state; the
+    # earlier Pubky Core pin (f68014c1) answered 405.
+    image: bitkit-docker/pubky-testnet:0.14.0
     build:
       context: ./marketplace/pubky-testnet
     restart: "no" # the fixture is disposable: a restarted testnet loses its accounts
@@ -473,13 +485,15 @@ services:
       - "127.0.0.1:15411:15411" # PKARR relay
       - "127.0.0.1:15412:15412" # HTTP relay
       - "127.0.0.1:6286:6286" # homeserver ICANN HTTP
-      - "127.0.0.1:6287:6287" # homeserver Pubky TLS
+      - "127.0.0.1:6287:6297" # homeserver Pubky TLS, through homeserver-proxy (in-namespace clients reach the homeserver on 6287 directly)
+      - "127.0.0.1:6298:6298" # homeserver-proxy control: delay or fail one identity's requests
       - "127.0.0.1:${MARKETPLACE_HOMESERVER_ADMIN_PORT:-16288}:6288" # homeserver admin (6288 is homegate's)
       - "127.0.0.1:${MARKETPLACE_PAYKIT_PORT:-3001}:3001" # paykit-server, shares this namespace
       - "127.0.0.1:3012:3012" # opt-in fixture-issuer, shares this namespace
       - "127.0.0.1:3013:3013" # opt-in rc56-peer, shares this namespace
 
-  # Paykit Server 722ef268 (v0.1.0-rc4), built from source with the upstream
+  # Paykit Server 0ffd4da, the head of pubky/paykit-server#46 (paykit-rs rc65, the version both apps pin; Pubky 0.14.0; move to its merge or
+  # release once #46 lands), built from source with the upstream
   # Dockerfile.local. Its setup flow emits the Pubky grant auth URL (cid and cpk)
   # that the apps' Paykit SDK requires. `./pubky-marketplace build` first checks
   # out the pinned trees under .marketplace/sources and confirms that the tree's
@@ -488,10 +502,14 @@ services:
   paykit-server:
     profiles: [marketplace]
     container_name: marketplace-paykit-server
-    image: bitkit-docker/paykit-server:722ef268
+    image: bitkit-docker/paykit-server:${PAYKIT_SERVER_TAG:-0ffd4da}
     build:
       context: ./.marketplace/sources/paykit-server
       dockerfile: Dockerfile.local
+      labels:
+        tech.masivo.paykit-server: ${PAYKIT_SERVER_REV:-0ffd4da2adaab048939e0ea18ff916a27a7cfb0e}
+        tech.masivo.paykit-rs: ${PAYKIT_RS_REV:-7185ae7da9315028e5331442d71d739c27f1442c}
+        tech.masivo.paykit-server-patches: ${PAYKIT_SERVER_PATCHES:-paykit-server-reader-accepts-proposal-expiry.patch}
       additional_contexts:
         paykit-lib: ./.marketplace/sources/paykit-rs/paykit-lib
         paykit-sdk: ./.marketplace/sources/paykit-rs/paykit-sdk
@@ -531,11 +549,15 @@ services:
   # paykit-reader-demo helper binaries from the paykit-server image.
   marketplace-driver:
     profiles: [marketplace]
-    image: bitkit-docker/marketplace-driver:local
+    image: bitkit-docker/marketplace-driver:${PAYKIT_SERVER_TAG:-0ffd4da}
     build:
       context: ./marketplace/driver
       additional_contexts:
         paykit: service:paykit-server
+        fixture: docker-image://bitkit-docker/payment-request-fixture:rc65-shared
+      labels:
+        tech.masivo.paykit-server: ${PAYKIT_SERVER_REV:-0ffd4da2adaab048939e0ea18ff916a27a7cfb0e}
+        tech.masivo.paykit-rs: ${PAYKIT_RS_REV:-7185ae7da9315028e5331442d71d739c27f1442c}
     network_mode: service:pubky-testnet
     depends_on:
       - pubky-testnet
@@ -549,10 +571,23 @@ services:
       - ./.marketplace/evidence:/evidence
     entrypoint: ["node", "/app/driver.mjs"]
 
-  # The rc56 SDK peers share the marketplace testnet namespace and regtest chain.
+  # Pubky TLS proxy in front of the testnet homeserver: the apps reach the homeserver through it (the host's 6287 above).
+  # It presents the static testnet's homeserver key and forwards to the homeserver's plain HTTP on 6286; its control port
+  # (6298) delays or fails the requests of one identity and path (README, Homeserver proxy). Without rules it only forwards.
+  homeserver-proxy:
+    profiles: [marketplace]
+    image: bitkit-docker/payment-request-fixture:rc65-shared
+    build: ./payment-requests
+    restart: on-failure
+    network_mode: service:pubky-testnet
+    depends_on:
+      - pubky-testnet
+    entrypoint: ["/usr/local/bin/homeserver-proxy"]
+
+  # The rc65 SDK peers (paykit-rs 7185ae7, the version both apps pin) share the marketplace testnet namespace and regtest chain. The service name `rc56-peer` stays: lanes and journeys address the peer by it.
   fixture-issuer:
     profiles: [payment-requests]
-    image: bitkit-docker/payment-request-fixture:rc56-24162ebb
+    image: bitkit-docker/payment-request-fixture:rc65-shared
     build: ./payment-requests
     restart: "no"
     network_mode: service:pubky-testnet
@@ -566,7 +601,7 @@ services:
 
   rc56-peer:
     profiles: [payment-requests]
-    image: bitkit-docker/payment-request-fixture:rc56-24162ebb
+    image: bitkit-docker/payment-request-fixture:rc65-shared
     build: ./payment-requests
     restart: "no"
     network_mode: service:pubky-testnet

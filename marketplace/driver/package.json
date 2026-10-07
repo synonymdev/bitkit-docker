@@ -7,6 +7,6 @@
   "dependencies": {
     "@noble/hashes": "1.8.0",
     "@scure/bip32": "1.7.0",
-    "@synonymdev/pubky": "0.10.0"
+    "@synonymdev/pubky": "0.14.0"
   }
 }

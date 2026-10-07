@@ -60,3 +60,39 @@ test('LNURL metadata stays available while callbacks fail until explicitly switc
     await setMode('error');
     assert.equal((await get(callbackPath)).status, 'ERROR');
 });
+
+test('a delayed callback is held until its time passes or the next mode change releases it', async (t) => {
+    const server = createApp({}).listen(0, '127.0.0.1');
+    await new Promise((resolve) => server.once('listening', resolve));
+    t.after(() => {
+        server.closeAllConnections();
+        server.close();
+    });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const get = async (path) => (await fetch(`${base}${path}`)).json();
+    const setMode = (body) => fetch(`${base}/fixture`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    const callbackPath = '/pay/fixture/callback?amount=21000';
+
+    assert.equal((await setMode({ mode: 'delay', ms: -1 })).status, 400);
+    assert.equal((await setMode({ mode: 'delay', ms: 300 })).status, 200);
+    let start = Date.now();
+    assert.ok(bolt11.decode((await get(callbackPath)).pr));
+    assert.ok(Date.now() - start >= 280);
+
+    assert.equal((await setMode({ mode: 'delay' })).status, 200);
+    start = Date.now();
+    const held = get(callbackPath);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal((await get('/fixture')).held, 1);
+    await setMode({ mode: 'error' });
+    assert.equal((await held).status, 'ERROR');
+    assert.ok(Date.now() - start >= 190);
+    const state = await get('/fixture');
+    assert.equal(state.held, 0);
+    assert.deepEqual(state.callbacks.map((c) => c.answer), ['invoice', 'error']);
+    assert.equal((await get('/fixture/invoices')).invoices.length, 1);
+    assert.equal((await get('/fixture/invoices')).invoices[0].settled, null);
+    assert.equal((await get('/channel/fixture')).status, 'ERROR');
+});
