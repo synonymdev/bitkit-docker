@@ -266,6 +266,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "paykit-lib",
  "paykit-sdk",
@@ -1687,8 +1688,8 @@ dependencies = [
 
 [[package]]
 name = "paykit-lib"
-version = "0.1.0-rc64"
-source = "git+https://github.com/pubky/paykit-rs.git?rev=27fa6ed181d9fc428a6e2854f884c699a524dbc6#27fa6ed181d9fc428a6e2854f884c699a524dbc6"
+version = "0.1.0-rc65"
+source = "git+https://github.com/pubky/paykit-rs.git?rev=7185ae7da9315028e5331442d71d739c27f1442c#7185ae7da9315028e5331442d71d739c27f1442c"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1710,8 +1711,8 @@ dependencies = [
 
 [[package]]
 name = "paykit-sdk"
-version = "0.1.0-rc64"
-source = "git+https://github.com/pubky/paykit-rs.git?rev=27fa6ed181d9fc428a6e2854f884c699a524dbc6#27fa6ed181d9fc428a6e2854f884c699a524dbc6"
+version = "0.1.0-rc65"
+source = "git+https://github.com/pubky/paykit-rs.git?rev=7185ae7da9315028e5331442d71d739c27f1442c#7185ae7da9315028e5331442d71d739c27f1442c"
 dependencies = [
  "anyhow",
  "async-trait",

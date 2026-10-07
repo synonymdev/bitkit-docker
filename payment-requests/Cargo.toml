@@ -7,9 +7,10 @@ edition = "2021"
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.8"
+base64 = "0.22"
 chrono = "0.4"
-paykit-lib = { git = "https://github.com/pubky/paykit-rs.git", rev = "27fa6ed181d9fc428a6e2854f884c699a524dbc6" }
-paykit-sdk = { git = "https://github.com/pubky/paykit-rs.git", rev = "27fa6ed181d9fc428a6e2854f884c699a524dbc6" }
+paykit-lib = { git = "https://github.com/pubky/paykit-rs.git", rev = "7185ae7da9315028e5331442d71d739c27f1442c" }
+paykit-sdk = { git = "https://github.com/pubky/paykit-rs.git", rev = "7185ae7da9315028e5331442d71d739c27f1442c" }
 pubky = "=0.14.0"
 pkarr = { version = "8.1", features = ["tls"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }

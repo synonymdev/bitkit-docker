@@ -1,4 +1,4 @@
-//! Disposable rc62 Paykit peer for Bitkit regtest journeys.
+//! Disposable rc65 Paykit peer for Bitkit regtest journeys.
 //! Two Compose services run this binary with separate identities and receiver paths.
 #![recursion_limit = "512"]
 
@@ -663,8 +663,50 @@ async fn endpoints(State(app): State<Arc<App>>, Json(input): Json<EndpointsInput
     })))
 }
 
+/// `paykit-key-authorization` (this binary under that name, in the marketplace driver's image): publishes the Paykit noise key
+/// authorization of an identity the driver signed up, as a Bitkit wallet does in its own Paykit setup. Paykit Server rc65 checks it
+/// before it accepts a setup claim. Reads `{"version":1,"creator_secret":"<base64url 32 bytes>"}` on stdin.
+async fn publish_key_authorization() -> Result<()> {
+    use base64::Engine;
+    #[derive(Deserialize)]
+    struct Input {
+        version: u8,
+        creator_secret: String,
+    }
+    let mut body = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
+    let input: Input = serde_json::from_str(&body)?;
+    if input.version != 1 {
+        bail!("unsupported input version");
+    }
+    let bytes: [u8; 32] = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(input.creator_secret.trim())?
+        .try_into()
+        .map_err(|_| anyhow!("creator_secret must be 32 bytes"))?;
+    let secret = PubkyLocalSecretKey::new(bytes);
+    let bootstrap = PubkySessionBootstrap::with_pubky(Pubky::testnet()?, "bitkit-docker.fixture")?
+        .with_auth_relay("http://localhost:15412/inbox")?;
+    let signed_in = bootstrap.sign_in(&secret, PAYKIT_AUTHORIZER_SESSION_CAPABILITIES).await?;
+    let pubky = signed_in.public_key.to_app_key();
+    let provider = SessionProvider(Arc::new(Mutex::new(Some(signed_in.access))));
+    let sdk = PaykitSdk::new(
+        PubkySharedStateStorage::new(provider.clone()),
+        provider,
+        FixturePaymentAdapter,
+        PaykitSdkConfig::new(PaykitAppId::new("qa-fixture")?)?,
+    );
+    sdk.initialize().await?;
+    sdk.publish_paykit_noise_key_authorization().await?;
+    println!("{}", json!({ "published": true, "pubky": pubky }));
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    let invoked = env::args().next().unwrap_or_default();
+    if invoked.ends_with("paykit-key-authorization") {
+        return publish_key_authorization().await;
+    }
     let app = Arc::new(setup().await?);
     let port: u16 = env::var("FIXTURE_PORT")
         .unwrap_or_else(|_| "3002".into())
