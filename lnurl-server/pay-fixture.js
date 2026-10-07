@@ -238,13 +238,11 @@ function createApp(env = process.env) {
             if (!/^0[23][0-9a-f]{64}$/.test(remoteid || '')) return error(res, 'remoteid must be a compressed public key');
             const capacity = Number(env.CHANNEL_SATS || 1000000);
             const push = Number(env.PUSH_SATS || 500000);
-            const balance = await lnd('GET', '/v1/balance/blockchain');
-            if (Number(balance.confirmed_balance || 0) < capacity * 2) {
-                await mine(101, (await lnd('GET', '/v1/newaddress?type=WITNESS_PUBKEY_HASH')).address);
-                // LND sees the blocks through bitcoind's zmq; wait until it counts the matured coinbase
-                for (let i = 0; i < 30 && Number((await lnd('GET', '/v1/balance/blockchain')).confirmed_balance || 0) < capacity * 2; i++) {
-                    await new Promise((resolve) => setTimeout(resolve, 1000));
-                }
+            const funded = async () => Number((await lnd('GET', '/v1/balance/blockchain')).confirmed_balance || 0) >= capacity * 2;
+            if (!(await funded())) await mine(101, (await lnd('GET', '/v1/newaddress?type=WITNESS_PUBKEY_HASH')).address);
+            // LND refuses to open a channel until it has synced the chain; after mining it also has to count the matured coinbase
+            for (let i = 0; i < 60 && !((await lnd('GET', '/v1/getinfo')).synced_to_chain && await funded()); i++) {
+                await new Promise((resolve) => setTimeout(resolve, 1000));
             }
             const opened = await lnd('POST', '/v1/channels', {
                 node_pubkey: Buffer.from(remoteid, 'hex').toString('base64'),
