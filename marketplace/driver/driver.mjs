@@ -486,7 +486,7 @@ async function createBuyer(sellerPubky) {
     { version: 1, operation: 'prepare', reader_secret: b64url(seed) },
     readerEnv(sellerPubky ?? fixture.seller.pubky),
   );
-  if (prepared.code !== 0) fail(`buyer receiver marker failed: ${prepared.stdout || prepared.stderr}`);
+  if (prepared.code !== 0) fail(`buyer receiver marker failed: ${[prepared.stdout, prepared.stderr].filter(Boolean).join(' ')}`);
   fixture.buyer = { pubky: buyer, receiver_path: BUYER_PATH, kind: 'headless' };
   await writeJson(FIXTURE_FILE, fixture);
   log(`headless buyer ready: ${buyer}`);
@@ -793,7 +793,7 @@ async function receive(args) {
     { version: 1, operation: 'receive', reader_secret: seed },
     readerEnv(purchase.seller),
   );
-  if (result.code !== 0) fail(`receive failed: ${result.stdout || result.stderr}`);
+  if (result.code !== 0) fail(`receive failed: ${[result.stdout, result.stderr].filter(Boolean).join(' ')}`);
   const request = JSON.parse(result.stdout);
   // The pinned reader rejects any endpoint other than btc-regtest-p2wpkh and any
   // payload that is not a JSON object with a string value before it projects.
@@ -1066,7 +1066,8 @@ async function verify() {
   evidence.seller = { pubky: fixture.seller.pubky, account_xpub: fixture.seller.account_xpub, account_index: fixture.seller.account_index };
   evidence.buyer = { pubky: buyer.pubky };
 
-  const peersBefore = await capture('peers_before', () => peers([]));
+  // ask about this run's buyer: without --buyer the report follows the latest purchase, which an earlier verify left
+  const peersBefore = await capture('peers_before', () => peers(['--buyer', buyer.pubky]));
   if (!peersBefore.ready_for_purchase || peersBefore.linked) fail('before the purchase the peers must be ready for a purchase and not linked yet');
 
   const created = await capture('purchase', () => purchase(['--buyer', 'headless']));

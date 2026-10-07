@@ -245,6 +245,11 @@ it reads `not_observable`: the fixture holds no key for the app's end of the lin
   setup with the current pin has been run headlessly (`seed` and `verify`) and not yet against an app. The
   Bitkit seller path (`seller-auth`, `purchase --seller bitkit`) has a headless self-test,
   `verify-bitkit-seller`, and has not been run against an app yet.
+- **Patched Paykit Server reader helper.** Since pubky/paykit-server `468f12c` (2 Oct, on master and in #46) every invoice's Payment
+  Request carries an acceptance deadline (`proposal_expires_at`), and the server's own `paykit-reader-demo` still rejects any request
+  that has one, so the headless buyer's `receive` ends in `protocol_failed`. The fixture applies
+  `marketplace/patches/paykit-server-reader-accepts-proposal-expiry.patch` to the pinned tree (image label
+  `tech.masivo.paykit-server-patches`); `fetch_sources` stops when a patch no longer applies, which is the sign upstream fixed it.
 - **Paykit Server on an unmerged branch.** The apps pin paykit-rs rc65, and only pubky/paykit-server#46 (`0ffd4da`) builds Paykit
   Server on rc65; master (`7ff868b`) is still on rc59. The fixture builds from #46's head until it merges or is released.
 - **Fixed container names.** The base services keep their fixed container names, so another checkout's

@@ -20,6 +20,8 @@ LOCKS_TAG=${LOCKS_TAG:-v0.1.0-rc8}
 SOURCES=.marketplace/sources
 # Compose reads these for the Paykit Server and driver image tags and labels.
 export PAYKIT_SERVER_REV PAYKIT_RS_REV PAYKIT_SERVER_TAG="${PAYKIT_SERVER_REV:0:7}"
+PAYKIT_SERVER_PATCHES=$(cd marketplace/patches 2>/dev/null && ls paykit-server-*.patch 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+export PAYKIT_SERVER_PATCHES
 PAYKIT_SERVER_IMAGE=bitkit-docker/paykit-server:$PAYKIT_SERVER_TAG
 DRIVER_IMAGE=bitkit-docker/marketplace-driver:$PAYKIT_SERVER_TAG
 PAYKIT_PORT="${MARKETPLACE_PAYKIT_PORT:-3001}"
@@ -125,6 +127,7 @@ fetch_pinned() {
     git -C "$dir" remote add origin "$url"
   fi
   if [ "$(git -C "$dir" rev-parse -q --verify HEAD 2>/dev/null || true)" != "$rev" ]; then
+    git -C "$dir" checkout -q -- . 2>/dev/null || true # drop the fixture's patches before moving to another revision
     git -C "$dir" fetch -q --depth 1 origin "$rev"
     git -C "$dir" checkout -q --detach FETCH_HEAD
   fi
@@ -146,8 +149,25 @@ check_lock_pins() {
   fi
 }
 
+# Fixes the fixture carries on top of the pinned Paykit Server tree until upstream has them (marketplace/patches, named in the
+# image label tech.masivo.paykit-server-patches). Each applies once; a patch that neither applies nor is applied stops the build.
+apply_paykit_server_patches() {
+  local patch
+  for patch in marketplace/patches/paykit-server-*.patch; do
+    [ -e "$patch" ] || continue
+    if git -C "$SOURCES/paykit-server" apply --check "$PWD/$patch" 2>/dev/null; then
+      git -C "$SOURCES/paykit-server" apply "$PWD/$patch"
+      echo "patched $SOURCES/paykit-server with $(basename "$patch")"
+    elif ! git -C "$SOURCES/paykit-server" apply --check --reverse "$PWD/$patch" 2>/dev/null; then
+      echo "$patch does not apply to paykit-server ${PAYKIT_SERVER_REV:0:8}; drop it if upstream fixed it" >&2
+      exit 1
+    fi
+  done
+}
+
 fetch_sources() {
   fetch_pinned https://github.com/pubky/paykit-server.git "$SOURCES/paykit-server" "$PAYKIT_SERVER_REV"
+  apply_paykit_server_patches
   fetch_pinned https://github.com/pubky/paykit-rs.git "$SOURCES/paykit-rs" "$PAYKIT_RS_REV"
   fetch_pinned https://github.com/pubky/locks.git "$SOURCES/locks" "$LOCKS_REV"
   check_lock_pins
@@ -182,9 +202,9 @@ build() {
 classic_build() {
   docker image inspect bitkit-docker/pubky-testnet:0.14.0 >/dev/null 2>&1 || compose build pubky-testnet
   printf '**/.git\n**/target\n' > "$SOURCES/.dockerignore"
-  python3 - "$SOURCES/paykit-server/Dockerfile.local" "$PAYKIT_SERVER_REV" "$PAYKIT_RS_REV" > "$SOURCES/Dockerfile.classic" <<'PY'
+  python3 - "$SOURCES/paykit-server/Dockerfile.local" "$PAYKIT_SERVER_REV" "$PAYKIT_RS_REV" "$PAYKIT_SERVER_PATCHES" > "$SOURCES/Dockerfile.classic" <<'PY'
 import re, sys
-text, server, paykit = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3]
+text, server, paykit, patches = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3], sys.argv[4]
 text = re.sub(r"^# syntax=.*\n", "", text)
 copies = "\n".join([
     "COPY paykit-rs/paykit-lib /build/paykit-rs/paykit-lib",
@@ -196,7 +216,7 @@ text, server_copy = re.subn(r"^COPY \. /build/paykit-server$", "COPY paykit-serv
 text = re.sub(r"RUN --mount=type=cache[^\n]*\\\n(\s+--mount=type=cache[^\n]*\\\n)*", "RUN ", text)
 if named != 1 or server_copy != 1 or "--mount" in text:
     sys.exit("Dockerfile.local changed shape; update classic_build")
-print(text + f'\nLABEL tech.masivo.paykit-server="{server}" tech.masivo.paykit-rs="{paykit}"')
+print(text + f'\nLABEL tech.masivo.paykit-server="{server}" tech.masivo.paykit-rs="{paykit}" tech.masivo.paykit-server-patches="{patches}"')
 PY
   docker build -q -f "$SOURCES/Dockerfile.classic" -t "$PAYKIT_SERVER_IMAGE" "$SOURCES"
   { sed -e "s|^COPY --from=paykit |COPY --from=$PAYKIT_SERVER_IMAGE |" -e "s|^COPY --from=fixture |COPY --from=bitkit-docker/payment-request-fixture:rc65-shared |" marketplace/driver/Dockerfile

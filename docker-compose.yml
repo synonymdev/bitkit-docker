@@ -454,6 +454,7 @@ services:
       labels:
         tech.masivo.paykit-server: ${PAYKIT_SERVER_REV:-0ffd4da2adaab048939e0ea18ff916a27a7cfb0e}
         tech.masivo.paykit-rs: ${PAYKIT_RS_REV:-7185ae7da9315028e5331442d71d739c27f1442c}
+        tech.masivo.paykit-server-patches: ${PAYKIT_SERVER_PATCHES:-paykit-server-reader-accepts-proposal-expiry.patch}
       additional_contexts:
         paykit-lib: ./.marketplace/sources/paykit-rs/paykit-lib
         paykit-sdk: ./.marketplace/sources/paykit-rs/paykit-sdk

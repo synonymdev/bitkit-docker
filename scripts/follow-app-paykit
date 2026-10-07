@@ -93,6 +93,13 @@ fi
 server_tags=$(compose_tags "$SERVER")
 server_image="$SERVER:$(head -1 <<<"$server_tags")"
 server_rev=$(built_rev "$server_image")
+patches=$(cd marketplace/patches 2>/dev/null && ls paykit-server-*.patch 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+built_patches=$(docker image inspect --format '{{ index .Config.Labels "tech.masivo.paykit-server-patches" }}' "$server_image" 2>/dev/null || true)
+[ "$built_patches" = "<no value>" ] && built_patches=""
+if [ "$server_rev" = "$rev" ] && [ "$built_patches" != "$patches" ]; then
+  echo "paykit-server: $server_image carries patches '${built_patches}'; the fixture carries '${patches}'"
+  server_rev="$rev (other patches)"
+fi
 if [ "$server_rev" = "$rev" ] && [ "$fixture_built" = 0 ]; then
   echo "paykit-server: $server_image is built from $rev"
 else

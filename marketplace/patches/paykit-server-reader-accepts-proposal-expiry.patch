@@ -1,0 +1,12 @@
+diff --git a/paykit-server/src/bin/paykit-reader-demo/payment_instructions.rs b/paykit-server/src/bin/paykit-reader-demo/payment_instructions.rs
+index f862b81..01e22b4 100644
+--- a/paykit-server/src/bin/paykit-reader-demo/payment_instructions.rs
++++ b/paykit-server/src/bin/paykit-reader-demo/payment_instructions.rs
+@@ -102,7 +102,6 @@ pub(super) fn payment_instructions(
+     if terms.amount.asset != "btc"
+         || terms.required_app_id.as_ref().map(|id| id.as_str()) != Some(PAYKIT_APP_ID)
+         || terms.recurrence.is_some()
+-        || terms.proposal_expires_at.is_some()
+         || terms.accepted_payment_endpoint_identifiers != [BITCOIN_ENDPOINT.to_owned()]
+         || terms
+             .metadata
