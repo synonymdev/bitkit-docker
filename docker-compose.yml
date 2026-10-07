@@ -297,6 +297,51 @@ services:
     ports:
       - "5050:5050"
 
+  # Wallet-backup VSS for a host that already runs other services. `vss-server`
+  # above stays the default stack's service (it also starts lnurl-auth-server).
+  # This profile starts only the server and its database, on 127.0.0.1:5050,
+  # and checks RS256 JWTs with lnurl-server/keys/public.pem.
+  vss-postgres:
+    profiles: [vss]
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - vss_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  vss:
+    profiles: [vss]
+    container_name: vss-server-fixture
+    image: vss-server:latest
+    build:
+      context: .
+      dockerfile: vss/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      vss-postgres:
+        condition: service_healthy
+    environment:
+      VSS_SERVER_HOST: 0.0.0.0
+      VSS_SERVER_PORT: "5050"
+      VSS_POSTGRESQL_HOST: vss-postgres
+      VSS_POSTGRESQL_PORT: "5432"
+      VSS_POSTGRESQL_USERNAME: postgres
+      VSS_POSTGRESQL_PASSWORD: postgres
+      VSS_JWT_PUBLIC_KEY_FILE: /app/jwt-public.pem
+    volumes:
+      - ./vss-server-config.toml:/app/vss-server-config.toml:ro
+      - ./lnurl-server/keys/public.pem:/app/jwt-public.pem:ro
+    ports:
+      - "127.0.0.1:5050:5050"
+
   homegate:
     container_name: homegate
     image: homegate:latest
@@ -538,6 +583,7 @@ volumes:
   trezor_emulator_logs:
   bitcoin_home:
   postgres_data:
+  vss_postgres_data:
   lnurl_auth_data:
   homegate_postgres_data:
   homegate_data:

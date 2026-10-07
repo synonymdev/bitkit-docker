@@ -1,6 +1,6 @@
 [submodule "vss-server"]
 	path = vss-server
-	url = git@github.com:synonymdev/vss-server.git
+	url = https://github.com/synonymdev/vss-server.git
 	branch = chore/rebase-stag-on-main
 [submodule "homegate"]
 	path = homegate
