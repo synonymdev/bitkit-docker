@@ -95,6 +95,18 @@ docker compose --profile lnurl-pay exec -T lnurl-server-fixture node --test pay-
 
 Use the address and forwarded port reachable by the wallet when requesting `/generate/pay` or `/pay/fixture`: the response derives its URLs from the request's host, including any remapped port. Set `LNURL_FIXTURE_DOMAIN` before starting the service if the wallet must use a different origin (for example `http://10.0.2.2:3010` for an Android emulator).
 
+`{"mode":"delay","ms":N}` holds every callback for `N` milliseconds and then answers with an invoice; without `ms` a callback waits until the next `POST /fixture`, which releases it with that request's mode (`healthy` for an invoice, `error` for an error). A callback is held for 15 minutes at most. `GET /fixture` lists the callbacks with how long each was held and what it answered, and `GET /fixture/invoices` lists the issued invoices with `settled` from LND, so a journey can check that a wallet did not pay after its deadline.
+
+The profile starts the project's LND beside the fixture, and invoices are real invoices of that LND. To make them payable from a wallet, give it a channel: `GET /generate/channel` returns an LNURL-channel; when the wallet accepts it, LND (funded on the project's bitcoind first when it holds too little) opens a 1,000,000 sat static-remote-key channel that pushes 500,000 sat to the wallet, and mines six blocks to confirm it (`CHANNEL_SATS` and `PUSH_SATS` change the amounts). The wallet dials LND at `LND_P2P_ADDRESS` (default `127.0.0.1:9735`, which an Android emulator reaches through `adb reverse tcp:9735 tcp:<published port>`). `GET /fixture/channels` shows LND's open and pending channels, and `POST /fixture/mine` with `{"blocks":N}` mines more blocks.
+
+```bash
+curl -fsS http://localhost:3010/generate/channel | jq -r .lnurl   # paste or scan in the wallet, then accept the connection
+curl -fsS http://localhost:3010/fixture/channels | jq '.open[] | {remote_pubkey, capacity, local_balance, remote_balance, active}'
+curl -fsS -X POST http://localhost:3010/fixture -H 'Content-Type: application/json' -d '{"mode":"delay"}'   # hold the next callbacks
+curl -fsS -X POST http://localhost:3010/fixture -H 'Content-Type: application/json' -d '{"mode":"healthy"}' # release them with invoices
+curl -fsS http://localhost:3010/fixture/invoices | jq
+```
+
 Healthy invoices use the requested amount in millisatoshis and bind the exact metadata with a SHA-256 description hash. They are signed, freshly generated `lnbcrt` invoices with a one-hour expiry and payment secret. This fixture supports invoice fetching, decoding and callback retry journeys; it has no Lightning node or channels and cannot settle payments. Use the regular LNURL server with LND for actual payments. Its controls are unauthenticated and intended only for disposable local test environments.
 
 ### VSS Server
@@ -290,6 +302,12 @@ rejected or canceled records, issue another request and call `/reject` or
 `POST /request` accepts `monthly_starts_at` (UTC RFC3339) and
 `period_start_deadline_seconds`; `/pay` then needs
 `billing_period_start` and `billing_period_end`.
+`POST /request` also accepts `proposal_expires_at` (UTC RFC3339, the
+acceptance deadline, apart from the payment deadline) and `lnurl`, an LNURL-pay
+string such as the LNURL fixture's `GET /generate/pay`: the request then
+accepts only `btc-lightning-lnurl`, which the private payment list sent with it
+offers beside the regtest address. `/pay` funds the issuer's bitcoind wallet by
+mining to it when it holds less than the payment and a fee.
 
 Example one-time issuance to a linked app after both sides report `Linked`:
 

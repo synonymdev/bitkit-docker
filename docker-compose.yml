@@ -162,9 +162,19 @@ services:
     build:
       context: ./lnurl-server
       dockerfile: Dockerfile.pay-fixture
+    # real invoices of the project's LND (payable once `/channel/fixture` gave the wallet a channel), and `/fixture/mine` on its bitcoind
+    depends_on:
+      - lnd
+      - darkhttpd
     environment:
       PORT: '3010'
       LNURL_FIXTURE_DOMAIN: ${LNURL_FIXTURE_DOMAIN:-}
+      LND_REST_URL: https://lnd:8080
+      LND_DIR: /lnd
+      LND_P2P_ADDRESS: 127.0.0.1:9735
+      BITCOIN_RPC_URL: http://polaruser:polarpass@bitcoind:43782
+    volumes:
+      - ./lnd:/lnd:ro
     ports:
       - '3010:3010'
     healthcheck:
