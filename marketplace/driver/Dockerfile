@@ -8,4 +8,7 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 COPY --from=paykit /usr/local/bin/paykit-companion-auth /usr/local/bin/paykit-reader-demo /usr/local/bin/
 # The helpers build their HTTP clients from the system CA store.
 COPY --from=paykit /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+# Paykit Server rc65 accepts a setup claim only after the identity published its Paykit noise key authorization; the payment request
+# fixture binary publishes it for the headless seller under this name (a Bitkit wallet does it in its own Paykit setup).
+COPY --from=fixture /usr/local/bin/fixture /usr/local/bin/paykit-key-authorization
 COPY driver.mjs ./

@@ -8,7 +8,7 @@
 // without a wallet app: the seller (watch-only setup) and the buyer (receive
 // and pay). Bitkit wallets take the buyer and seller roles in the app journey.
 // A Bitkit seller approves two Pubky grants: the Paykit setup (`setup-url`) and
-// a `/pub/locks.app/` write grant for the marketplace (`seller-auth`), and the
+// a `/pub/app.locks/` write grant for the marketplace (`seller-auth`), and the
 // driver publishes the payment lock with that grant session.
 //
 // Secrets stay in /state/secrets (root, 0700). Paykit Server only ever sees the
@@ -43,7 +43,7 @@ const HEADLESS_CLIENT_ID = 'marketplace.fixture';
 // The write grant a Bitkit seller approves for the marketplace (the role Locks plays). The apps show the
 // client id as "Requester ID" and the path as the requested permission.
 const LOCKS_CLIENT_ID = 'locks.app';
-const LOCKS_CAPS = '/pub/locks.app/:rw';
+const LOCKS_CAPS = '/pub/app.locks/:rw';
 // The testnet's own HTTP relay; wallets reach it on localhost like the homeserver (Android: adb reverse 15412).
 const LOCKS_RELAY = 'http://localhost:15412/inbox/';
 const BITKIT_SESSION_SECRET = 'bitkit-seller.session';
@@ -192,7 +192,9 @@ async function signedPost(path, body, { signature } = {}) {
   const text = canonical(body);
   const issuerSeed = Buffer.from(await readSecret('issuer.seed'), 'base64url');
   const headers = { 'content-type': 'application/json' };
-  const value = signature ?? b64url(sign(null, Buffer.from(text), keyFromSeed(issuerSeed)));
+  // Paykit Server signs requests over `paykit-http-signature-v1\0<METHOD>\0<path>\0<body>` (src/http/auth.rs, signature_preimage).
+  const preimage = Buffer.concat([Buffer.from(`paykit-http-signature-v1\0POST\0${path}\0`), Buffer.from(text)]);
+  const value = signature ?? b64url(sign(null, preimage, keyFromSeed(issuerSeed)));
   if (value !== 'none') headers['x-paykit-signature'] = value;
   const response = await fetch(`${PAYKIT_URL}${path}`, { method: 'POST', headers, body: text });
   const raw = await response.text();
@@ -244,7 +246,7 @@ async function signUpIdentity(seed) {
   return keypair.publicKey.toString();
 }
 
-// A write session on the seller's /pub/locks.app/, for publishing the payment lock. The headless seller signs
+// A write session on the seller's /pub/app.locks/, for publishing the payment lock. The headless seller signs
 // in with its own key. A Bitkit seller has no key here: the session is the grant its wallet approved in
 // `seller-auth`, restored from the state volume (each restore mints a fresh short-lived bearer).
 async function sellerSession(seller) {
@@ -408,6 +410,12 @@ async function beginSetup() {
 // The watch-only setup approval: the wallet's role in Paykit Server's /setup flow. The wallet gives the server
 // its account xpub with the companion claim, then approves the setup grant with its Pubky identity.
 async function approveSetupAs(authUrl, identitySeed, xpub, accountIndex) {
+  // Paykit Server rc65 checks the identity's Paykit noise key authorization before it accepts the claim; a wallet publishes it
+  // in its own Paykit setup, the headless identity publishes it here.
+  const authorized = await runHelper('paykit-key-authorization', { version: 1, creator_secret: b64url(identitySeed) });
+  if (authorized.code !== 0 || !authorized.stdout.includes('"published":true')) {
+    fail(`Paykit key authorization failed: ${authorized.stderr || authorized.stdout}`);
+  }
   const approval = await runHelper('paykit-companion-auth', {
     version: 1,
     auth_url: authUrl,
@@ -719,14 +727,15 @@ async function purchase(args) {
   const lock = lockFor({ seller: seller.pubky, sats, issuer: await issuerPubky() });
   const lockText = canonical(lock);
   const lockId = crockford(blake3(Buffer.from(lockText)));
-  const lockPath = `/pub/locks.app/${lockId}.json`;
+  const lockPath = `/pub/app.locks/${lockId}.json`;
   const session = await sellerSession(seller);
   await session.storage.putText(lockPath, lockText);
 
   const bundleId = newBundleId();
   const lockResource = `${seller.pubky}${lockPath}`;
   const response = await signedPost('/invoices', { bundle_id: bundleId, lock_resource: lockResource, reader });
-  if (response.status !== 204) {
+  // Paykit Server answers 200 with invoice_created_at and payment_deadline (204 with no body before the Locks payment window)
+  if (response.status !== 200 && response.status !== 204) {
     const code = response.json?.error?.code ? ` ${response.json.error.code}` : '';
     const hint =
       response.status === 503
@@ -748,6 +757,7 @@ async function purchase(args) {
     derived_address: seller.kind === 'headless' ? await expectedAddress(seller.account_xpub, childIndex) : null,
     child_index: seller.kind === 'headless' ? childIndex : null,
     created_at: new Date().toISOString(),
+    payment_deadline: response.json?.payment_deadline ?? null,
     state: 'created',
   };
   purchases.push(record);
@@ -1098,7 +1108,7 @@ async function verify() {
 const androidOpen = (authUrl, serial) =>
   `adb${serial ? ` -s ${serial}` : ''} shell "am start -a android.intent.action.VIEW -d '${authUrl}'"`;
 
-// The marketplace's request for a write grant on the seller's /pub/locks.app/, shown to the seller as a Pubky
+// The marketplace's request for a write grant on the seller's /pub/app.locks/, shown to the seller as a Pubky
 // auth request (the role Locks plays). The flow polls the relay as long as this process runs.
 async function startLocksGrant(relay) {
   const flow = await pubkyClient().startGrantAuthFlow(LOCKS_CAPS, AuthFlowKind.signin(), { clientId: LOCKS_CLIENT_ID, relay });
@@ -1123,7 +1133,7 @@ async function awaitGrant(flow, seconds) {
 const writesLocks = (capabilities) =>
   capabilities.some((cap) => {
     const at = cap.lastIndexOf(':');
-    return cap.slice(at + 1).includes('w') && '/pub/locks.app/'.startsWith(cap.slice(0, at));
+    return cap.slice(at + 1).includes('w') && '/pub/app.locks/'.startsWith(cap.slice(0, at));
   });
 
 // Keep the approved grant as the seller's write session and record the identity that approved it.

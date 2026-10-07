@@ -7,16 +7,21 @@ set -euo pipefail
 CLI_NAME="$(basename "$0")"
 cd "$(dirname "$0")"
 
-# Pinned upstream revisions. Paykit Server af0151a is the revision of 1 Oct 2026 on Pubky 0.14.0 and paykit-rs rc59 (pubky/paykit-server master). Its setup
-# flow emits the Pubky grant auth URL (pubkyauth://signin_grant with cid and cpk) that the apps' Paykit SDK
-# (0.1.0-rc55) requires, and still carries x-bitkit-claim=watch-only-account-v1. Earlier revisions such as
-# 867fc883 emit the legacy pubkyauth://signin URL, which the apps reject.
+# Pinned upstream revisions. Paykit Server is pubky/paykit-server#46 (head 0ffd4da, paykit-rs v0.1.0-rc65, the version both apps pin; not merged
+# or released yet, the latest release is rc8): move PAYKIT_SERVER_REV to its merge or release once #46 lands. Its setup flow emits the Pubky
+# grant auth URL (pubkyauth://signin_grant with cid and cpk) that the apps' Paykit SDK requires.
 # The Pubky testnet is pinned in marketplace/pubky-testnet/Dockerfile.
-PAYKIT_SERVER_REV=af0151a40bc67d4fbfaebc3b4242b53fe64a3ffc
-PAYKIT_RS_REV=7b75d28c2679656a0d1c6e1ef6d8ee9881c9be07   # v0.1.0-rc59, paykit-server's paykit-lib and paykit-sdk pin
-LOCKS_REV=8502ef79c443c640976a2a901b80c5e717319149       # v0.1.0-rc1, paykit-server's locks-core pin
+PAYKIT_SERVER_REV=${PAYKIT_SERVER_REV:-0ffd4da2adaab048939e0ea18ff916a27a7cfb0e}
+PAYKIT_RS_REV=${PAYKIT_RS_REV:-7185ae7da9315028e5331442d71d739c27f1442c}   # v0.1.0-rc65, paykit-server's paykit-lib and paykit-sdk pin
+PAYKIT_RS_TAG=${PAYKIT_RS_TAG:-v0.1.0-rc65}
+LOCKS_REV=${LOCKS_REV:-b3dc87c961f6b907d76cde9c4a28f00670d5231e}       # v0.1.0-rc8, paykit-server's locks-core pin
+LOCKS_TAG=${LOCKS_TAG:-v0.1.0-rc8}
 
 SOURCES=.marketplace/sources
+# Compose reads these for the Paykit Server and driver image tags and labels.
+export PAYKIT_SERVER_REV PAYKIT_RS_REV PAYKIT_SERVER_TAG="${PAYKIT_SERVER_REV:0:7}"
+PAYKIT_SERVER_IMAGE=bitkit-docker/paykit-server:$PAYKIT_SERVER_TAG
+DRIVER_IMAGE=bitkit-docker/marketplace-driver:$PAYKIT_SERVER_TAG
 PAYKIT_PORT="${MARKETPLACE_PAYKIT_PORT:-3001}"
 COMPOSE=(docker compose --profile marketplace)
 CHAIN_SERVICES=(bitcoind bitcoinsetup electrs)
@@ -26,10 +31,11 @@ PEER_SERVICES=(fixture-issuer rc56-peer)
 
 show_help() {
   cat <<EOF
-Pubky marketplace fixture: Pubky testnet, Paykit Server af0151a, regtest chain and a purchase driver.
+Pubky marketplace fixture: Pubky testnet, Paykit Server 0ffd4da (paykit-rs rc65), regtest chain and a purchase driver.
 Usage: ${CLI_NAME} <command> [options]
 Stack:
     build                              Fetch the pinned sources and build the images
+    build-paykit                       Build only Paykit Server and the driver (pins overridable through the environment)
     up                                 Build if needed, start the chain and the fixture, wait until ready
     ps                                 Show the fixture containers and Paykit Server readiness
     logs [service]                     Follow the fixture logs
@@ -133,8 +139,8 @@ fetch_pinned() {
 # swaps those for the checkouts below. Fail here, before a long build, if a tag does not resolve to our pins.
 check_lock_pins() {
   local lock="$SOURCES/paykit-server/Cargo.lock"
-  if ! grep -Fq "source = \"git+https://github.com/pubky/paykit-rs.git?tag=v0.1.0-rc59#$PAYKIT_RS_REV\"" "$lock" ||
-    ! grep -Fq "source = \"git+https://github.com/pubky/locks.git?tag=v0.1.0-rc1#$LOCKS_REV\"" "$lock"; then
+  if ! grep -Fq "source = \"git+https://github.com/pubky/paykit-rs.git?tag=$PAYKIT_RS_TAG#$PAYKIT_RS_REV\"" "$lock" ||
+    ! grep -Fq "source = \"git+https://github.com/pubky/locks.git?tag=$LOCKS_TAG#$LOCKS_REV\"" "$lock"; then
     echo "$lock does not lock paykit-rs $PAYKIT_RS_REV and locks $LOCKS_REV" >&2
     exit 1
   fi
@@ -147,16 +153,61 @@ fetch_sources() {
   check_lock_pins
 }
 
+# Paykit Server and the driver, which carries its helpers and the payment request fixture's `paykit-key-authorization` (scripts/follow-app-paykit sets the pins through the environment).
+build_paykit() {
+  fetch_sources
+  if docker buildx version >/dev/null 2>&1; then
+    compose build paykit-server
+    compose build marketplace-driver
+  else
+    classic_build
+  fi
+}
+
 build() {
   fetch_sources
-  compose build pubky-testnet paykit-server
-  compose build marketplace-driver
+  # the payment request fixture's image first: the driver copies its `paykit-key-authorization` from it
   compose build homeserver-proxy
+  if docker buildx version >/dev/null 2>&1; then
+    compose build pubky-testnet paykit-server
+    compose build marketplace-driver
+  else
+    classic_build
+  fi
+}
+
+# Docker without BuildKit (the QA boxes) cannot build Paykit Server's Dockerfile.local (named contexts, cache mounts) or the
+# driver's (a service context). Build both with the classic builder from generated Dockerfiles: the named contexts become
+# COPYs from .marketplace/sources, the cache mounts go, and the labels name the pinned revisions as the Compose build does.
+classic_build() {
+  docker image inspect bitkit-docker/pubky-testnet:0.14.0 >/dev/null 2>&1 || compose build pubky-testnet
+  printf '**/.git\n**/target\n' > "$SOURCES/.dockerignore"
+  python3 - "$SOURCES/paykit-server/Dockerfile.local" "$PAYKIT_SERVER_REV" "$PAYKIT_RS_REV" > "$SOURCES/Dockerfile.classic" <<'PY'
+import re, sys
+text, server, paykit = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3]
+text = re.sub(r"^# syntax=.*\n", "", text)
+copies = "\n".join([
+    "COPY paykit-rs/paykit-lib /build/paykit-rs/paykit-lib",
+    "COPY paykit-rs/paykit-sdk /build/paykit-rs/paykit-sdk",
+    "COPY locks/Cargo.toml locks/Cargo.lock /build/locks/",
+] + [f"COPY locks/{crate} /build/locks/{crate}" for crate in ("locks-core", "locks-service", "locks-server", "locks-sdk", "locks-e2e")])
+text, named = re.subn(r"RUN --mount=from=paykit-lib.*?/build/locks/\n", copies + "\n", text, flags=re.S)
+text, server_copy = re.subn(r"^COPY \. /build/paykit-server$", "COPY paykit-server /build/paykit-server", text, flags=re.M)
+text = re.sub(r"RUN --mount=type=cache[^\n]*\\\n(\s+--mount=type=cache[^\n]*\\\n)*", "RUN ", text)
+if named != 1 or server_copy != 1 or "--mount" in text:
+    sys.exit("Dockerfile.local changed shape; update classic_build")
+print(text + f'\nLABEL tech.masivo.paykit-server="{server}" tech.masivo.paykit-rs="{paykit}"')
+PY
+  docker build -q -f "$SOURCES/Dockerfile.classic" -t "$PAYKIT_SERVER_IMAGE" "$SOURCES"
+  { sed -e "s|^COPY --from=paykit |COPY --from=$PAYKIT_SERVER_IMAGE |" -e "s|^COPY --from=fixture |COPY --from=bitkit-docker/payment-request-fixture:rc65-shared |" marketplace/driver/Dockerfile
+    echo "LABEL tech.masivo.paykit-server=\"$PAYKIT_SERVER_REV\" tech.masivo.paykit-rs=\"$PAYKIT_RS_REV\""; } > marketplace/driver/.Dockerfile.classic
+  docker build -q -f marketplace/driver/.Dockerfile.classic -t "$DRIVER_IMAGE" marketplace/driver
+  rm -f marketplace/driver/.Dockerfile.classic
 }
 
 images_present() {
-  docker image inspect bitkit-docker/pubky-testnet:0.14.0 bitkit-docker/paykit-server:af0151a \
-    bitkit-docker/marketplace-driver:0.14.0 bitkit-docker/payment-request-fixture:rc64-shared >/dev/null 2>&1
+  docker image inspect bitkit-docker/pubky-testnet:0.14.0 "$PAYKIT_SERVER_IMAGE" \
+    "$DRIVER_IMAGE" bitkit-docker/payment-request-fixture:rc65-shared >/dev/null 2>&1
 }
 
 wait_ready() {
@@ -222,6 +273,7 @@ fi
 
 case "$command" in
   build) build ;;
+  build-paykit) build_paykit ;;
   up) up ;;
   ps)
     compose ps "${CHAIN_SERVICES[@]}" "${FIXTURE_SERVICES[@]}" || true

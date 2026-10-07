@@ -437,7 +437,8 @@ services:
       - "127.0.0.1:3012:3012" # opt-in fixture-issuer, shares this namespace
       - "127.0.0.1:3013:3013" # opt-in rc56-peer, shares this namespace
 
-  # Paykit Server af0151a (paykit-rs rc59, Pubky 0.14.0), built from source with the upstream
+  # Paykit Server 0ffd4da, the head of pubky/paykit-server#46 (paykit-rs rc65, the version both apps pin; Pubky 0.14.0; move to its merge or
+  # release once #46 lands), built from source with the upstream
   # Dockerfile.local. Its setup flow emits the Pubky grant auth URL (cid and cpk)
   # that the apps' Paykit SDK requires. `./pubky-marketplace build` first checks
   # out the pinned trees under .marketplace/sources and confirms that the tree's
@@ -446,10 +447,13 @@ services:
   paykit-server:
     profiles: [marketplace]
     container_name: marketplace-paykit-server
-    image: bitkit-docker/paykit-server:af0151a
+    image: bitkit-docker/paykit-server:${PAYKIT_SERVER_TAG:-0ffd4da}
     build:
       context: ./.marketplace/sources/paykit-server
       dockerfile: Dockerfile.local
+      labels:
+        tech.masivo.paykit-server: ${PAYKIT_SERVER_REV:-0ffd4da2adaab048939e0ea18ff916a27a7cfb0e}
+        tech.masivo.paykit-rs: ${PAYKIT_RS_REV:-7185ae7da9315028e5331442d71d739c27f1442c}
       additional_contexts:
         paykit-lib: ./.marketplace/sources/paykit-rs/paykit-lib
         paykit-sdk: ./.marketplace/sources/paykit-rs/paykit-sdk
@@ -489,11 +493,15 @@ services:
   # paykit-reader-demo helper binaries from the paykit-server image.
   marketplace-driver:
     profiles: [marketplace]
-    image: bitkit-docker/marketplace-driver:0.14.0
+    image: bitkit-docker/marketplace-driver:${PAYKIT_SERVER_TAG:-0ffd4da}
     build:
       context: ./marketplace/driver
       additional_contexts:
         paykit: service:paykit-server
+        fixture: docker-image://bitkit-docker/payment-request-fixture:rc65-shared
+      labels:
+        tech.masivo.paykit-server: ${PAYKIT_SERVER_REV:-0ffd4da2adaab048939e0ea18ff916a27a7cfb0e}
+        tech.masivo.paykit-rs: ${PAYKIT_RS_REV:-7185ae7da9315028e5331442d71d739c27f1442c}
     network_mode: service:pubky-testnet
     depends_on:
       - pubky-testnet
@@ -512,7 +520,7 @@ services:
   # (6298) delays or fails the requests of one identity and path (README, Homeserver proxy). Without rules it only forwards.
   homeserver-proxy:
     profiles: [marketplace]
-    image: bitkit-docker/payment-request-fixture:rc64-shared
+    image: bitkit-docker/payment-request-fixture:rc65-shared
     build: ./payment-requests
     restart: on-failure
     network_mode: service:pubky-testnet
@@ -520,10 +528,10 @@ services:
       - pubky-testnet
     entrypoint: ["/usr/local/bin/homeserver-proxy"]
 
-  # The rc64 SDK peers share the marketplace testnet namespace and regtest chain. The service name `rc56-peer` stays: lanes and journeys address the peer by it.
+  # The rc65 SDK peers (paykit-rs 7185ae7, the version both apps pin) share the marketplace testnet namespace and regtest chain. The service name `rc56-peer` stays: lanes and journeys address the peer by it.
   fixture-issuer:
     profiles: [payment-requests]
-    image: bitkit-docker/payment-request-fixture:rc64-shared
+    image: bitkit-docker/payment-request-fixture:rc65-shared
     build: ./payment-requests
     restart: "no"
     network_mode: service:pubky-testnet
@@ -537,7 +545,7 @@ services:
 
   rc56-peer:
     profiles: [payment-requests]
-    image: bitkit-docker/payment-request-fixture:rc64-shared
+    image: bitkit-docker/payment-request-fixture:rc65-shared
     build: ./payment-requests
     restart: "no"
     network_mode: service:pubky-testnet
