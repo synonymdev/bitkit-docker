@@ -3,6 +3,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The host ports compose publishes the two peers on; a project that remaps them sets these.
+issuer_port="${FIXTURE_ISSUER_PORT:-23012}"
+peer_port="${RC56_PEER_PORT:-23013}"
+
 fail() {
   echo "prepare: $*" >&2
   exit 1
@@ -29,26 +33,26 @@ wait_health() {
   done
 }
 deadline=$((SECONDS + 150))
-wait_health 3012
-wait_health 3013
+wait_health "$issuer_port"
+wait_health "$peer_port"
 
-issuer=$(curl --fail-with-body -sS http://127.0.0.1:3012/info)
-peer=$(curl --fail-with-body -sS http://127.0.0.1:3013/info)
+issuer=$(curl --fail-with-body -sS http://127.0.0.1:$issuer_port/info)
+peer=$(curl --fail-with-body -sS http://127.0.0.1:$peer_port/info)
 to_peer=$(jq -nc --arg pubky "$(jq -r .pubky <<<"$peer")" --arg path "$(jq -r .receiver_path <<<"$peer")" '{peer_pubky:$pubky,peer_path:$path}')
 to_issuer=$(jq -nc --arg pubky "$(jq -r .pubky <<<"$issuer")" --arg path "$(jq -r .receiver_path <<<"$issuer")" '{peer_pubky:$pubky,peer_path:$path}')
 
-issuer_link=$(post 3012 /sync "$to_peer" 2>/dev/null || true)
-peer_link=$(post 3013 /sync "$to_issuer" 2>/dev/null || true)
+issuer_link=$(post "$issuer_port" /sync "$to_peer" 2>/dev/null || true)
+peer_link=$(post "$peer_port" /sync "$to_issuer" 2>/dev/null || true)
 if ! jq -e '.link == "linked"' <<<"$issuer_link" >/dev/null 2>&1; then
-  post 3012 /link "$(jq -c '. + {mode:"initiate"}' <<<"$to_peer")" >/dev/null || fail 'issuer link initiate failed'
+  post "$issuer_port" /link "$(jq -c '. + {mode:"initiate"}' <<<"$to_peer")" >/dev/null || fail 'issuer link initiate failed'
 fi
 if ! jq -e '.link == "linked"' <<<"$peer_link" >/dev/null 2>&1; then
-  post 3013 /link "$(jq -c '. + {mode:"accept"}' <<<"$to_issuer")" >/dev/null || fail 'peer link accept failed'
+  post "$peer_port" /link "$(jq -c '. + {mode:"accept"}' <<<"$to_issuer")" >/dev/null || fail 'peer link accept failed'
 fi
 linked=false
 for _ in {1..20}; do
-  issuer_link=$(post 3012 /sync "$to_peer")
-  peer_link=$(post 3013 /sync "$to_issuer")
+  issuer_link=$(post "$issuer_port" /sync "$to_peer")
+  peer_link=$(post "$peer_port" /sync "$to_issuer")
   if jq -e '.link == "linked"' <<<"$issuer_link" >/dev/null &&
      jq -e '.link == "linked"' <<<"$peer_link" >/dev/null; then
     linked=true
@@ -64,7 +68,7 @@ fi
 issue() {
   local reference="$1" amount="$2" extra="${3:-}" response
   if [ -z "$extra" ]; then extra='{}'; fi
-  response=$(post 3012 /request "$(jq -nc --argjson peer "$to_peer" --argjson extra "$extra" --arg ref "$reference" --argjson sats "$amount" '$peer + $extra + {reference:$ref,amount_sats:$sats}')") || return 1
+  response=$(post "$issuer_port" /request "$(jq -nc --argjson peer "$to_peer" --argjson extra "$extra" --arg ref "$reference" --argjson sats "$amount" '$peer + $extra + {reference:$ref,amount_sats:$sats}')") || return 1
   jq -er .payment_request_id <<<"$response" || {
     echo "prepare: no payment_request_id issuing $reference: $response" >&2
     return 1
@@ -75,32 +79,32 @@ record() {
   jq -nc --argjson peer "$to_issuer" --arg id "$1" '$peer + {payment_request_id:$id}'
 }
 
-receive() { post 3013 /sync "$to_issuer" >/dev/null; }
-sync_issuer() { post 3012 /sync "$to_peer" >/dev/null; }
+receive() { post "$peer_port" /sync "$to_issuer" >/dev/null; }
+sync_issuer() { post "$issuer_port" /sync "$to_peer" >/dev/null; }
 
 proposed=$(issue rc56-proposed 10000)
 receive
 
 accepted=$(issue rc56-accepted 11000)
 receive
-post 3013 /accept "$(record "$accepted")" >/dev/null
+post "$peer_port" /accept "$(record "$accepted")" >/dev/null
 sync_issuer
 
 rejected=$(issue rc56-rejected 12000)
 receive
-post 3013 /reject "$(record "$rejected")" >/dev/null
+post "$peer_port" /reject "$(record "$rejected")" >/dev/null
 sync_issuer
 
 canceled=$(issue rc56-canceled 13000)
 receive
-post 3013 /cancel "$(record "$canceled")" >/dev/null
+post "$peer_port" /cancel "$(record "$canceled")" >/dev/null
 sync_issuer
 
 completed=$(issue rc56-completed 14000)
 receive
-post 3013 /accept "$(record "$completed")" >/dev/null
+post "$peer_port" /accept "$(record "$completed")" >/dev/null
 sync_issuer
-paid=$(post 3013 /pay "$(jq -nc --argjson record "$(record "$completed")" --arg address "$(jq -r .address <<<"$issuer")" '$record + {address:$address,amount_sats:14000}')")
+paid=$(post "$peer_port" /pay "$(jq -nc --argjson record "$(record "$completed")" --arg address "$(jq -r .address <<<"$issuer")" '$record + {address:$address,amount_sats:14000}')")
 jq -e '.proof_sent == true' <<<"$paid" >/dev/null || fail "request $completed: /pay did not deliver the proof: $paid"
 sync_issuer
 
@@ -122,9 +126,9 @@ PY
 monthly_extra=$(jq -nc --arg start "$(jq -r .start <<<"$period")" '{monthly_starts_at:$start,period_start_deadline_seconds:3456000}')
 monthly_accepted=$(issue rc56-monthly-accepted 15000 "$monthly_extra")
 receive
-post 3013 /accept "$(record "$monthly_accepted")" >/dev/null
+post "$peer_port" /accept "$(record "$monthly_accepted")" >/dev/null
 sync_issuer
-monthly_paid=$(post 3013 /pay "$(jq -nc --argjson record "$(record "$monthly_accepted")" --arg address "$(jq -r .address <<<"$issuer")" --arg start "$(jq -r .start <<<"$period")" --arg end "$(jq -r .end <<<"$period")" '$record + {address:$address,amount_sats:15000,billing_period_start:$start,billing_period_end:$end}')")
+monthly_paid=$(post "$peer_port" /pay "$(jq -nc --argjson record "$(record "$monthly_accepted")" --arg address "$(jq -r .address <<<"$issuer")" --arg start "$(jq -r .start <<<"$period")" --arg end "$(jq -r .end <<<"$period")" '$record + {address:$address,amount_sats:15000,billing_period_start:$start,billing_period_end:$end}')")
 jq -e '.proof_sent == true' <<<"$monthly_paid" >/dev/null || fail "request $monthly_accepted: /pay did not deliver the proof: $monthly_paid"
 sync_issuer
 monthly_proposed=$(issue rc56-monthly-proposed 16000 "$monthly_extra")
@@ -136,7 +140,7 @@ for txid in "$(jq -r .txid <<<"$paid")" "$(jq -r .txid <<<"$monthly_paid")"; do
     jq -e '.confirmations >= 1' >/dev/null || fail "transaction $txid is not confirmed after mining one block"
 done
 
-records=$(post 3013 /records "$to_issuer")
+records=$(post "$peer_port" /records "$to_issuer")
 check() {
   local id="$1" expected="$2" actual
   jq -e --arg id "$id" --arg expected "$expected" '.records[] | select(.payment_request_id == $id and .state == $expected)' <<<"$records" >/dev/null && return 0

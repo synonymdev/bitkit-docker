@@ -131,7 +131,7 @@ struct RequestInput {
     deadline_at: Option<String>,
     monthly_starts_at: Option<String>,
     period_start_deadline_seconds: Option<u64>,
-    // an LNURL-pay string (`GET :3010/generate/pay` of the lane's LNURL fixture): the request then accepts only `btc-lightning-lnurl`,
+    // an LNURL-pay string (`GET :23010/generate/pay` of the lane's LNURL fixture): the request then accepts only `btc-lightning-lnurl`,
     // which the private payment list sent with it offers (bitkit-android#1401 J19, 7 Oct)
     lnurl: Option<String>,
     // when the proposal itself expires (the acceptance deadline), apart from the payment deadline

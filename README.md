@@ -29,7 +29,7 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
 3. **Check health:**
 
    ```bash
-   curl http://localhost:3000/health
+   curl http://localhost:23000/health
    curl http://localhost:6288/
    ```
 
@@ -44,15 +44,15 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
 
 ### LND (Lightning Network Daemon)
 
-- **REST API**: `http://localhost:8080`
-- **P2P**: `localhost:9735`
-- **RPC**: `localhost:10009`
+- **REST API**: `http://localhost:23180`
+- **P2P**: `localhost:23735`
+- **RPC**: `localhost:23009`
 - **Network**: Regtest
 - **Features**: Zero-conf, SCID alias, AMP support
 
 ### LNURL Server
 
-- **Port**: 3000
+- **Port**: 23000
 - **Features**:
   - LNURL-withdraw
   - LNURL-pay
@@ -72,53 +72,53 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
 
 ### LNURL-pay callback fixture
 
-The optional `lnurl-pay` profile serves LNURL-pay metadata and controlled invoice callback responses on port `3010`. Each Compose project has its own in-memory mode, which starts as `error` and stays there until explicitly changed. Restarting the container resets it to `error`.
+The optional `lnurl-pay` profile serves LNURL-pay metadata and controlled invoice callback responses on port `23010`. Each Compose project has its own in-memory mode, which starts as `error` and stays there until explicitly changed. Restarting the container resets it to `error`.
 
 ```bash
 docker compose --profile lnurl-pay up -d --build --wait lnurl-server-fixture
-curl -fsS http://localhost:3010/health
+curl -fsS http://localhost:23010/health
 # Read the encoded LNURL and QR image for the fixed payment endpoint.
-curl -fsS http://localhost:3010/generate/pay
-curl -fsS http://localhost:3010/pay/fixture
+curl -fsS http://localhost:23010/generate/pay
+curl -fsS http://localhost:23010/pay/fixture
 # Initially returns HTTP 200 with LNURL status ERROR and a reason, on every request.
-curl -fsS 'http://localhost:3010/pay/fixture/callback?amount=100001'
+curl -fsS 'http://localhost:23010/pay/fixture/callback?amount=100001'
 # Change the same callback to return a fresh signed regtest invoice.
-curl -fsS -X POST http://localhost:3010/fixture \
+curl -fsS -X POST http://localhost:23010/fixture \
   -H 'Content-Type: application/json' -d '{"mode":"healthy"}'
-curl -fsS 'http://localhost:3010/pay/fixture/callback?amount=100001'
+curl -fsS 'http://localhost:23010/pay/fixture/callback?amount=100001'
 # Reset before another journey; GET /fixture reads the current mode.
-curl -fsS -X POST http://localhost:3010/fixture \
+curl -fsS -X POST http://localhost:23010/fixture \
   -H 'Content-Type: application/json' -d '{"mode":"error"}'
 # Verify the fixture's HTTP contract and signed invoice properties.
 docker compose --profile lnurl-pay exec -T lnurl-server-fixture node --test pay-fixture.test.js
 ```
 
-Use the address and forwarded port reachable by the wallet when requesting `/generate/pay` or `/pay/fixture`: the response derives its URLs from the request's host, including any remapped port. Set `LNURL_FIXTURE_DOMAIN` before starting the service if the wallet must use a different origin (for example `http://10.0.2.2:3010` for an Android emulator).
+Use the address and forwarded port reachable by the wallet when requesting `/generate/pay` or `/pay/fixture`: the response derives its URLs from the request's host, including any remapped port. Set `LNURL_FIXTURE_DOMAIN` before starting the service if the wallet must use a different origin (for example `http://10.0.2.2:23010` for an Android emulator).
 
 `{"mode":"delay","ms":N}` holds every callback for `N` milliseconds and then answers with an invoice; without `ms` a callback waits until the next `POST /fixture`, which releases it with that request's mode (`healthy` for an invoice, `error` for an error). A callback is held for 15 minutes at most. `GET /fixture` lists the callbacks with how long each was held and what it answered, and `GET /fixture/invoices` lists the issued invoices with `settled` from LND, so a journey can check that a wallet did not pay after its deadline.
 
-The profile starts the project's LND beside the fixture, and invoices are real invoices of that LND. To make them payable from a wallet, give it a channel: `GET /generate/channel` returns an LNURL-channel; when the wallet accepts it, LND (funded on the project's bitcoind first when it holds too little) opens a 1,000,000 sat static-remote-key channel that pushes 500,000 sat to the wallet, and mines six blocks to confirm it (`CHANNEL_SATS` and `PUSH_SATS` change the amounts). Ask `/generate/pay` and `/generate/channel` with a `Host` header naming the address the wallet dials (`-H 'Host: 127.0.0.1:3010'` for an Android emulator mapped with `adb reverse`) when you reach the fixture on another port: the encoded LNURL takes its origin from that header. The wallet dials LND at `LND_P2P_ADDRESS` (default `127.0.0.1:9735`, which an Android emulator reaches through `adb reverse tcp:9735 tcp:<published port>`). `GET /fixture/channels` shows LND's open and pending channels, and `POST /fixture/mine` with `{"blocks":N}` mines more blocks.
+The profile starts the project's LND beside the fixture, and invoices are real invoices of that LND. To make them payable from a wallet, give it a channel: `GET /generate/channel` returns an LNURL-channel; when the wallet accepts it, LND (funded on the project's bitcoind first when it holds too little) opens a 1,000,000 sat static-remote-key channel that pushes 500,000 sat to the wallet, and mines six blocks to confirm it (`CHANNEL_SATS` and `PUSH_SATS` change the amounts). Ask `/generate/pay` and `/generate/channel` with a `Host` header naming the address the wallet dials (`-H 'Host: 127.0.0.1:23010'` for an Android emulator mapped with `adb reverse`) when you reach the fixture on another port: the encoded LNURL takes its origin from that header. The wallet dials LND at `LND_P2P_ADDRESS` (default `127.0.0.1:23735`, which an Android emulator reaches through `adb reverse tcp:23735 tcp:<published port>`). `GET /fixture/channels` shows LND's open and pending channels, and `POST /fixture/mine` with `{"blocks":N}` mines more blocks.
 
 ```bash
-curl -fsS http://localhost:3010/generate/channel | jq -r .lnurl   # paste or scan in the wallet, then accept the connection
-curl -fsS http://localhost:3010/fixture/channels | jq '.open[] | {remote_pubkey, capacity, local_balance, remote_balance, active}'
-curl -fsS -X POST http://localhost:3010/fixture -H 'Content-Type: application/json' -d '{"mode":"delay"}'   # hold the next callbacks
-curl -fsS -X POST http://localhost:3010/fixture -H 'Content-Type: application/json' -d '{"mode":"healthy"}' # release them with invoices
-curl -fsS http://localhost:3010/fixture/invoices | jq
+curl -fsS http://localhost:23010/generate/channel | jq -r .lnurl   # paste or scan in the wallet, then accept the connection
+curl -fsS http://localhost:23010/fixture/channels | jq '.open[] | {remote_pubkey, capacity, local_balance, remote_balance, active}'
+curl -fsS -X POST http://localhost:23010/fixture -H 'Content-Type: application/json' -d '{"mode":"delay"}'   # hold the next callbacks
+curl -fsS -X POST http://localhost:23010/fixture -H 'Content-Type: application/json' -d '{"mode":"healthy"}' # release them with invoices
+curl -fsS http://localhost:23010/fixture/invoices | jq
 ```
 
 Healthy invoices use the requested amount in millisatoshis and bind the exact metadata with a SHA-256 description hash. They are signed, freshly generated `lnbcrt` invoices with a one-hour expiry and payment secret. This fixture supports invoice fetching, decoding and callback retry journeys; it has no Lightning node or channels and cannot settle payments. Use the regular LNURL server with LND for actual payments. Its controls are unauthenticated and intended only for disposable local test environments.
 
 ### VSS Server
 
-- **Port**: 5050 (`127.0.0.1:5050` from the `vss` profile)
+- **Port**: 23050 (`127.0.0.1:23050` from the `vss` profile)
 - **Features**: RS256 JWT authentication
 - **Profile**: `docker compose --profile vss up -d vss-postgres vss` starts the server and its own database without the rest of the stack or the LNURL auth server. The server checks tokens with `lnurl-server/keys/public.pem`. The default `vss-server` service is unchanged.
 
 ### Homegate
 
 - **Port**: 6288
-- **Database**: Dedicated `homegate-postgres` service, exposed on host port 5433 by default
+- **Database**: Dedicated `homegate-postgres` service, exposed on host port 23433 by default
 - **Admin mock**: `homegate-admin-mock`, available only inside the Compose network and password-protected by default
 - **Features**:
   - Pubky Homeserver signup-code gatekeeping
@@ -127,7 +127,7 @@ Healthy invoices use the requested amount in millisatoshis and bind the exact me
 
 ### LNURL-Auth Server
 
-- **Port**: 5005
+- **Port**: 23005
 - **Features**: Issuing RS256 JWT via LNURL-Auth protocol expected by VSS
 - **Endpoints**:
   - `/health` - Service health check
@@ -139,25 +139,50 @@ Healthy invoices use the requested amount in millisatoshis and bind the exact me
 - **Network**: Regtest
 - **Features**: Full blockchain indexing
 
+## Ports
+
+Every host port is 1024 or above. The ports Bitkit, the Pubky SDK or Bitkit's UI tests dial by a fixed number keep it; every other service publishes in `23000`-`23999`, mostly at `23000` plus the last three digits of its container port. Services reach each other on their container ports (`lnd:8080`, `darkhttpd:80`).
+
+| Service | Host port | Container port |
+| --- | --- | --- |
+| bitcoind RPC, P2P | 43782, 39388 | same |
+| electrs | 60001 | same |
+| darkhttpd (fee estimates) | 23080 | 80 |
+| LND REST, P2P, gRPC | 23180, 23735, 23009 | 8080, 9735, 10009 |
+| LDK backup server | 23003 | 3003 |
+| LNURL server | 23000 | 3000 |
+| LNURL-pay fixture (`lnurl-pay`) | 23010 | 3010 |
+| PostgreSQL | 23432 | 5432 |
+| LNURL-auth server | 23005 | 5005 |
+| VSS server | 23050 | 5050 |
+| Homegate, its PostgreSQL | 6288 (`HOMEGATE_PORT`), 23433 (`HOMEGATE_POSTGRES_PORT`) | 6288, 5432 |
+| Trezor Bridge (both Trezor services) | 21325, 21328 | same |
+| Trezor User Env controller, dashboard, MCP, VNC, noVNC | 9001, 23902, 23903, 23590, 23680 | 9001, 9002, 9003, 5900, 6080 |
+| Trezor emulator fixture controller, dashboard, noVNC (`trezor-emulator`) | 23901, 23902, 23680 | 9001, 9002, 6080 |
+| Pubky testnet DHT, PKARR relay, HTTP relay, homeserver HTTP, Pubky TLS (`marketplace`) | 6881, 15411, 15412, 6286, 6287 | 6881, 15411, 15412, 6286, 6297 (homeserver-proxy) |
+| homeserver-proxy control, homeserver admin (`marketplace`) | 23298, 23288 (`MARKETPLACE_HOMESERVER_ADMIN_PORT`) | 6298, 6288 |
+| Paykit Server (`marketplace`) | 23101 (`MARKETPLACE_PAYKIT_PORT`) | 3001 |
+| `fixture-issuer`, `rc56-peer` (`payment-requests`) | 23012, 23013 | 3012, 3013 |
+
 ## API Examples
 
 
 
 ```bash
 # Health Check
-curl http://localhost:3000/health | jq
+curl http://localhost:23000/health | jq
 
 # Generate LNURL-withdraw
-curl -s http://localhost:3000/generate/withdraw | jq
+curl -s http://localhost:23000/generate/withdraw | jq
 
 # Generate LNURL-pay
-curl -s http://localhost:3000/generate/pay | jq
+curl -s http://localhost:23000/generate/pay | jq
 
 # Lightning Address
-curl -s http://localhost:3000/.well-known/lnurlp/alice | jq
+curl -s http://localhost:23000/.well-known/lnurlp/alice | jq
 
 # VSS Health Check
-curl -v http://localhost:5050/vss/getObject
+curl -v http://localhost:23050/vss/getObject
 
 # Homegate service check
 curl http://localhost:6288/
@@ -265,7 +290,7 @@ cancel and pay requests through the shared regtest Bitcoin node. Plain
 ./pubky-marketplace seed
 docker compose --profile marketplace --profile payment-requests build fixture-issuer
 docker compose --profile marketplace --profile payment-requests up -d --no-build fixture-issuer rc56-peer
-for port in 3012 3013; do
+for port in 23012 23013; do
   until health=$(curl -fsS "http://127.0.0.1:$port/health"); do sleep 2; done
   jq <<<"$health"
 done
@@ -314,7 +339,7 @@ Example one-time issuance to a linked app after both sides report `Linked`:
 
 ```bash
 APP_PUBKY=pubky... # replace with the disposable app identity
-curl -fsS -X POST http://127.0.0.1:3012/request -H 'content-type: application/json' \
+curl -fsS -X POST http://127.0.0.1:23012/request -H 'content-type: application/json' \
   -d "$(jq -nc --arg pubky "$APP_PUBKY" '{peer_pubky:$pubky,peer_path:"bitkit/wallet",amount_sats:15000,reference:"rc56-app-history"}')" | jq
 ```
 
@@ -338,14 +363,14 @@ before it sends the request, then restores them:
 
 ```bash
 TO_APP=$(jq -nc --arg pubky "$APP_PUBKY" '{peer_pubky:$pubky,peer_path:"bitkit/wallet"}')
-curl -fsS -X POST http://127.0.0.1:3012/endpoints -H 'content-type: application/json' \
+curl -fsS -X POST http://127.0.0.1:23012/endpoints -H 'content-type: application/json' \
   -d "$(jq -c '. + {action:"withhold"}' <<<"$TO_APP")" | jq
-curl -fsS -X POST http://127.0.0.1:3012/request -H 'content-type: application/json' \
+curl -fsS -X POST http://127.0.0.1:23012/request -H 'content-type: application/json' \
   -d "$(jq -c '. + {amount_sats:15000,reference:"unresolvable"}' <<<"$TO_APP")" | jq
 # ... the app retries and shows "The payment request is no longer available." ...
-curl -fsS -X POST http://127.0.0.1:3012/endpoints -H 'content-type: application/json' \
+curl -fsS -X POST http://127.0.0.1:23012/endpoints -H 'content-type: application/json' \
   -d "$(jq -c '. + {action:"restore"}' <<<"$TO_APP")" | jq
-curl -fsS http://127.0.0.1:3012/endpoints | jq   # {"withheld": false, ...}
+curl -fsS http://127.0.0.1:23012/endpoints | jq   # {"withheld": false, ...}
 ```
 
 `withhold` removes the issuer's public `btc-regtest-p2wpkh` endpoint and sends
@@ -383,17 +408,17 @@ forwards every request to the homeserver's plain HTTP on 6286. Clients inside
 the testnet's namespace (Paykit Server, the payment request peers) still reach
 the homeserver on 6287 directly. Without rules the proxy only forwards.
 
-Its control port, 6298, delays or fails the requests of one identity whose
+Its control port, published on 23298 (6298 in the container), delays or fails the requests of one identity whose
 owner-relative path starts with `path` (empty matches every path):
 
 ```bash
 # hold one identity's own-profile reads for 20 s
-curl -fsS -X POST http://127.0.0.1:6298/rules -H 'content-type: application/json' \
+curl -fsS -X POST http://127.0.0.1:23298/rules -H 'content-type: application/json' \
   -d "$(jq -nc --arg pubky "$APP_PUBKY" '{pubky:$pubky,path:"/pub/pubky.app/profile.json",delay_ms:20000}')" | jq
 # fail them instead (after an optional delay): add "status": 503
-curl -fsS http://127.0.0.1:6298/rules | jq
-curl -fsS http://127.0.0.1:6298/requests | jq '.requests[-20:]'   # owner, path, status, delayed_ms of recent requests
-curl -fsS -X DELETE http://127.0.0.1:6298/rules | jq             # remove every rule
+curl -fsS http://127.0.0.1:23298/rules | jq
+curl -fsS http://127.0.0.1:23298/requests | jq '.requests[-20:]'   # owner, path, status, delayed_ms of recent requests
+curl -fsS -X DELETE http://127.0.0.1:23298/rules | jq             # remove every rule
 ```
 
 A rule with the same `pubky` and `path` replaces the earlier one. `pubky`
@@ -418,8 +443,8 @@ docker compose --profile trezor-emulator exec -T trezor-emulator \
 ```
 
 Point the simulator's Bridge URL at `http://127.0.0.1:21325`. The dashboard is at
-`http://127.0.0.1:9005`, the controller at `ws://127.0.0.1:9004`, and noVNC at
-`http://127.0.0.1:6080`. For projects that remap ports, use their published Bridge
+`http://127.0.0.1:23902`, the controller at `ws://127.0.0.1:23901`, and noVNC at
+`http://127.0.0.1:23680`. For projects that remap ports, use their published Bridge
 port (or the simulator seat's forwarded address). The device uses the `all all
 ...` seed, no PIN or passphrase, and the label `Bitkit Test Trezor`. Each project's
 volumes are separate, and each startup wipes and initializes its own emulator.
@@ -485,7 +510,7 @@ Open the dashboard at `Settings -> Advanced -> Dev Settings -> Trezor`, then che
 
 Run the relevant Trezor branch from Xcode. The User Env dashboard and Bridge are available on the host at:
 
-- User Env dashboard: `http://localhost:9002`
+- User Env dashboard: `http://localhost:23902`
 - Trezor Bridge: `http://localhost:21325`
 
 Open the dashboard at `Settings -> Advanced -> Trezor Hardware Wallet`, then check:
@@ -534,7 +559,7 @@ For Bitkit wallets, build each simulator or emulator against this fixture before
     --extra-args "E2E_HOMESERVER_PUBKY=$(./pubky-marketplace info | jq -r .homeserver_z32)"
   ```
 
-- Android: build the local E2E backend with the same `E2E_HOMESERVER_PUBKY` in the environment. On each emulator run `adb reverse tcp:<port> tcp:<port>` for 6286, 6287, 15411 and 15412 (the homeserver admin port is published on 16288 and no app uses it); the Android journey README covers the emulator's `10.0.2.2` host address.
+- Android: build the local E2E backend with the same `E2E_HOMESERVER_PUBKY` in the environment. On each emulator run `adb reverse tcp:<port> tcp:<port>` for 6286, 6287, 15411 and 15412 (the homeserver admin port is published on 23288 and no app uses it); the Android journey README covers the emulator's `10.0.2.2` host address.
 - In each wallet create a Bitkit-generated Pubky identity (not a Pubky Ring import) and enable contact payments.
 
 Then, with the buyer wallet:
@@ -571,26 +596,26 @@ Remove the fixture with `./pubky-marketplace down`, or start over with `./pubky-
 #### Bech32 LNURL Pay
 
 - in `Env.{kt,swift}`, use for REGTEST electrum server: `"tcp://localhost:60001"`
-- `adb reverse tcp:60001 tcp:60001 && adb reverse tcp:9735 tcp:9735`
+- `adb reverse tcp:60001 tcp:60001 && adb reverse tcp:23735 tcp:23735`
 - in app, wipe current wallet data and create fresh one
 - run `docker compose up --build -d`
 - fund onchain wallet: `./bitcoin-cli fund`
 - send funds to in-app wallet address: `./bitcoin-cli send 0.25 -m`
 - get local LND URI and open channel:
-  - `curl -s http://localhost:3000/health | jq -r '.lnd.uris[0]' | pbcopy`
+  - `curl -s http://localhost:23000/health | jq -r '.lnd.uris[0]' | pbcopy`
   - in app: send > paste > complete the flow
   - `./bitcoin-cli mine 3`
-- generate LNURL pay: `http://localhost:3000/generate/pay`
+- generate LNURL pay: `http://localhost:23000/generate/pay`
 - paste lnurl into app
-- generate fixed amount LNURL pay (QuickPay): `curl -s 'http://localhost:3000/generate/pay?minSendable=10000&maxSendable=10000' | jq -r .lnurl | pbcopy`
+- generate fixed amount LNURL pay (QuickPay): `curl -s 'http://localhost:23000/generate/pay?minSendable=10000&maxSendable=10000' | jq -r .lnurl | pbcopy`
 
 #### Lightning Address
 
-- `ngrok http 3000`
+- `ngrok http 23000`
 - change `DOMAIN` in `docker-compose.yml` to `__NGROK_URL__`
 - `docker compose down` if running
 - `docker compose up --build -d`
-- `http://localhost:3000/.well-known/lnurlp/alice`
+- `http://localhost:23000/.well-known/lnurlp/alice`
 - copy the email-like lightning address and paste into app
 
 #### LNURL-Channel
@@ -600,34 +625,34 @@ Remove the fixture with `./pubky-marketplace down`, or start over with `./pubky-
   - `docker compose down -v`
   - `rm -rf ./lnd ./lnurl-server/data`
   - `docker compose up --build -d`
-- `adb reverse tcp:60001 tcp:60001 && adb reverse tcp:9735 tcp:9735`
+- `adb reverse tcp:60001 tcp:60001 && adb reverse tcp:23735 tcp:23735`
 - fund onchain wallet: `./bitcoin-cli fund`
 - fund LND wallet:
-  - `./bitcoin-cli send 0.2 "$(curl -s http://localhost:3000/health | jq -r '.lnd.address')" -m`
-  - check balance: `curl -s http://localhost:3000/health | jq '.lnd.balance'`
-- generate LNURL channel: `http://localhost:3000/generate/channel`
+  - `./bitcoin-cli send 0.2 "$(curl -s http://localhost:23000/health | jq -r '.lnd.address')" -m`
+  - check balance: `curl -s http://localhost:23000/health | jq '.lnd.balance'`
+- generate LNURL channel: `http://localhost:23000/generate/channel`
 - paste lnurl into app and complete the flow
 - mine blocks: `./bitcoin-cli mine 6`
 
 #### LNURL-Withdraw
 - setup a channel (see above)
-- generate LNURL: `curl -s http://localhost:3000/generate/withdraw | jq -r .lnurl | pbcopy`
+- generate LNURL: `curl -s http://localhost:23000/generate/withdraw | jq -r .lnurl | pbcopy`
 - set an amount of at least ₿5000 & complete the flow
-- generate LNURL with limits: `curl -s "http://localhost:3000/generate/withdraw?minWithdrawable=100000&maxWithdrawable=200000" | jq -r .lnurl | pbcopy`
+- generate LNURL with limits: `curl -s "http://localhost:23000/generate/withdraw?minWithdrawable=100000&maxWithdrawable=200000" | jq -r .lnurl | pbcopy`
   - `minWithdrawable` (optional): min msats (default: 1000 = 1 sat)
   - `maxWithdrawable` (optional): max msats (default: 100000000 = 100k sats)
 
 #### LNURL-Auth
 
-- set DOMAIN in `docker-compose.yml` to `http://__YOUR_NETWORK_IP__:3000`
+- set DOMAIN in `docker-compose.yml` to `http://__YOUR_NETWORK_IP__:23000`
 - run `docker compose down`
 - run `docker compose up --build -d`
-- generate LNURL auth: `http://localhost:3000/generate/auth`
+- generate LNURL auth: `http://localhost:23000/generate/auth`
 - paste lnurl into app and complete the flow
 
 #### LDK-NODE with JWT auth to VSS
 
-- `adb reverse tcp:3000 tcp:3000 && adb reverse tcp:5050 tcp:5050`
+- `adb reverse tcp:23000 tcp:23000 && adb reverse tcp:23050 tcp:23050`
   - cd to root dir
   - `git submodule update --init --recursive`
   - `docker compose up --build -d`
@@ -645,13 +670,13 @@ Remove the fixture with `./pubky-marketplace down`, or start over with `./pubky-
   - `rm -rf ./lnd ./lnurl-server/data`
   - `docker compose up --build -d`
 - in `Env.kt`, change `ElectrumServers.REGTEST` to `"tcp://127.0.0.1:60001"`
-- `adb reverse tcp:60001 tcp:60001 && adb reverse tcp:9735 tcp:9735`
+- `adb reverse tcp:60001 tcp:60001 && adb reverse tcp:23735 tcp:23735`
 - fund onchain wallet: `./bitcoin-cli fund`
 - fund LND wallet:
-  - `./bitcoin-cli send 0.2 "$(curl -s http://localhost:3000/health | jq -r '.lnd.address')" -m`
-  - check balance: `curl -s http://localhost:3000/health | jq '.lnd.balance'`
+  - `./bitcoin-cli send 0.2 "$(curl -s http://localhost:23000/health | jq -r '.lnd.address')" -m`
+  - check balance: `curl -s http://localhost:23000/health | jq '.lnd.balance'`
 - fund app wallet: `./bitcoin-cli send 0.002 -m`
-- `curl -s http://localhost:3000/health | jq -r '.lnd.uris[0]' | pbcopy`
+- `curl -s http://localhost:23000/health | jq -r '.lnd.uris[0]' | pbcopy`
 - in app: send > paste > complete flow for 100_000 sats > return to home screen
 - mine blocks: `./bitcoin-cli mine 6`
 - await channel ready notice
@@ -665,9 +690,9 @@ Key environment variables in `docker-compose.yml`:
 - `BITCOIN_RPC_HOST`: Bitcoin RPC host (default: `bitcoind`)
 - `BITCOIN_RPC_PORT`: Bitcoin RPC port (default: `43782`)
 - `LND_REST_HOST`: LND REST API host (default: `lnd`)
-- `LND_REST_PORT`: LND REST API port (default: `8080`)
+- `LND_REST_PORT`: LND REST API port inside the compose network (default: `8080`; the host reaches it on `23180`)
 - `HOMEGATE_PORT`: Host port for Homegate (default: `6288`)
-- `HOMEGATE_POSTGRES_PORT`: Host port for Homegate PostgreSQL (default: `5433`)
+- `HOMEGATE_POSTGRES_PORT`: Host port for Homegate PostgreSQL (default: `23433`)
 - `HOMEGATE_ADMIN_MOCK_PASSWORD`: Admin password expected by the local Homegate admin API mock (default: `admin`; keep this in sync with [homegate-config.toml](homegate-config.toml))
 - `HOMEGATE_ADMIN_MOCK_PUBKY`: Homeserver public key returned by the local Homegate admin API mock
 
@@ -762,7 +787,7 @@ docker compose up --build -d
 3. Check LND wallet balance:
 
 ```sh
-curl -s http://localhost:3000/health | jq '.lnd.balance'
+curl -s http://localhost:23000/health | jq '.lnd.balance'
 ```
 
 ## Security Notes

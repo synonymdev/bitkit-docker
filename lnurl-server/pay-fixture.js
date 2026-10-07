@@ -219,7 +219,7 @@ function createApp(env = process.env) {
             const info = await lnd('GET', '/v1/getinfo');
             const k1 = randomBytes(32).toString('hex');
             channels.set(k1, { created_at: new Date().toISOString() });
-            res.json({ tag: 'channelRequest', uri: `${info.identity_pubkey}@${env.LND_P2P_ADDRESS || '127.0.0.1:9735'}`, callback: `${origin(req)}/channel/fixture/callback`, k1 });
+            res.json({ tag: 'channelRequest', uri: `${info.identity_pubkey}@${env.LND_P2P_ADDRESS || '127.0.0.1:23735'}`, callback: `${origin(req)}/channel/fixture/callback`, k1 });
         } catch (err) {
             next(err);
         }

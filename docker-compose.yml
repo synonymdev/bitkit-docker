@@ -1,3 +1,8 @@
+# Host ports: every published port is 1024 or above. A port that Bitkit or the Pubky SDK dials by a fixed number keeps it
+# (bitcoind 43782 and 39388, electrs 60001, homegate 6288, the Pubky testnet's 6881, 15411, 15412, 6286 and 6287, the
+# Trezor Bridge's 21325 and 21328, Trezor User Env's controller 9001). Every other service publishes in 23000-23999,
+# mostly at 23000 plus the last three digits of its container port. Services reach each other on their container
+# ports. README "Ports" lists the map.
 x-trezor-user-env-image: &trezor_user_env_image ghcr.io/trezor/trezor-user-env@sha256:15871ebb234bf7c0197cfcd31ddc2edbe90173cd6386fc0283fafe05bf888c06
 
 services:
@@ -77,7 +82,7 @@ services:
     expose:
       - '80'
     ports:
-      - '80:80'
+      - '23080:80'
     volumes:
       - './btc-fee-estimates.json:/www/btc-fee-estimates.json'
     command:
@@ -94,15 +99,15 @@ services:
       - '9735' # P2P
       - '10009' # RPC
     ports:
-      - '8080:8080'
-      - '9735:9735'
-      - '10009:10009'
+      - '23180:8080' # REST
+      - '23735:9735' # P2P
+      - '23009:10009' # RPC
     volumes:
       - './lnd:/home/lnd/.lnd/'
     command:
       - '--noseedbackup'
       - '--alias=lnd'
-      - '--externalip=127.0.0.1'
+      - '--externalip=127.0.0.1:23735' # the host port, so the node URI a wallet reads dials the published P2P port
       - '--bitcoin.active'
       - '--bitcoin.regtest'
       - '--bitcoin.node=bitcoind'
@@ -125,7 +130,7 @@ services:
     expose:
       - '3003'
     ports:
-      - '3003:3003'
+      - '23003:3003'
     environment:
       HOST: '0.0.0.0'
       PORT: '3003'
@@ -138,7 +143,7 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - DOMAIN=http://localhost:3000
+      - DOMAIN=http://localhost:23000
       - DATABASE_URL=sqlite:///data/lnurl.db
       # Bitcoin node connection
       - BITCOIN_RPC_HOST=bitcoind
@@ -154,7 +159,7 @@ services:
       - ./lnurl-server/data:/data
       - ./lnd:/lnd-certs:ro
     ports:
-      - "3000:3000"
+      - "23000:3000"
 
   lnurl-server-fixture:
     profiles: [lnurl-pay]
@@ -171,12 +176,12 @@ services:
       LNURL_FIXTURE_DOMAIN: ${LNURL_FIXTURE_DOMAIN:-}
       LND_REST_URL: https://lnd:8080
       LND_DIR: /lnd
-      LND_P2P_ADDRESS: 127.0.0.1:9735
+      LND_P2P_ADDRESS: 127.0.0.1:23735
       BITCOIN_RPC_URL: http://polaruser:polarpass@bitcoind:43782
     volumes:
       - ./lnd:/lnd:ro
     ports:
-      - '3010:3010'
+      - '23010:3010'
     healthcheck:
       test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:3010/health').then(r => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
       interval: 5s
@@ -195,7 +200,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./sql/v0_create_vss_db.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
-      - "5432:5432"
+      - "23432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 10s
@@ -213,7 +218,7 @@ services:
     volumes:
       - homegate_postgres_data:/var/lib/postgresql/data
     ports:
-      - "${HOMEGATE_POSTGRES_PORT:-5433}:5432"
+      - "${HOMEGATE_POSTGRES_PORT:-23433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d pubky_homegate"]
       interval: 10s
@@ -251,7 +256,7 @@ services:
     environment:
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=5005
-      - SERVER_DOMAIN=${DOMAIN:-http://localhost:5005}
+      - SERVER_DOMAIN=${DOMAIN:-http://localhost:23005}
       - JWT_PRIVATE_KEY_PATH=/app/keys/private.pem
       - JWT_PUBLIC_KEY_PATH=/app/keys/public.pem
       - JWT_EXPIRES_IN=24h
@@ -265,7 +270,7 @@ services:
       - ./lnurl-server/keys:/app/keys:ro
       - lnurl_auth_data:/app/data
     ports:
-      - "5005:5005"
+      - "23005:5005"
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://localhost:5005/health"]
       interval: 30s
@@ -305,11 +310,11 @@ services:
     volumes:
       - ./vss-server-config.toml:/app/vss-server-config.toml:ro
     ports:
-      - "5050:5050"
+      - "23050:5050"
 
   # Wallet-backup VSS for a host that already runs other services. `vss-server`
   # above stays the default stack's service (it also starts lnurl-auth-server).
-  # This profile starts only the server and its database, on 127.0.0.1:5050,
+  # This profile starts only the server and its database, on 127.0.0.1:23050,
   # and checks RS256 JWTs with lnurl-server/keys/public.pem.
   vss-postgres:
     profiles: [vss]
@@ -350,7 +355,7 @@ services:
       - ./vss-server-config.toml:/app/vss-server-config.toml:ro
       - ./lnurl-server/keys/public.pem:/app/jwt-public.pem:ro
     ports:
-      - "127.0.0.1:5050:5050"
+      - "127.0.0.1:23050:5050"
 
   homegate:
     container_name: homegate
@@ -390,9 +395,9 @@ services:
     ports:
       - "127.0.0.1:21325:21325" # Bridge legacy API used by Bitkit
       - "127.0.0.1:21328:21328" # Bridge current API
-      - "127.0.0.1:9004:9001" # controller; avoids marketplace port 3001 seat blocks
-      - "127.0.0.1:9005:9002" # dashboard
-      - "127.0.0.1:6080:6080" # emulator screen / noVNC
+      - "127.0.0.1:23901:9001" # controller
+      - "127.0.0.1:23902:9002" # dashboard
+      - "127.0.0.1:23680:6080" # emulator screen / noVNC
     volumes:
       - trezor_emulator_state:/var/tmp
       - trezor_emulator_logs:/trezor-user-env/logs
@@ -408,12 +413,12 @@ services:
     image: *trezor_user_env_image
     ports:
       - "9001:9001"   # User Env controller websocket
-      - "9002:9002"   # User Env dashboard
+      - "23902:9002"  # User Env dashboard
       - "21325:21325" # Trezor Bridge legacy port used by Bitkit
       - "21328:21328" # Trezor Bridge current port
-      - "15900:5900"  # VNC port, offset to avoid local VNC conflicts
-      - "6080:6080"   # noVNC web viewer
-      - "9003:9003"   # MCP server SSE transport
+      - "23590:5900"  # VNC
+      - "23680:6080"  # noVNC web viewer
+      - "23903:9003"  # MCP server SSE transport
     environment:
       - MACOS=1
       - REGTEST_RPC_URL=http://host.docker.internal:43782
@@ -486,11 +491,11 @@ services:
       - "127.0.0.1:15412:15412" # HTTP relay
       - "127.0.0.1:6286:6286" # homeserver ICANN HTTP
       - "127.0.0.1:6287:6297" # homeserver Pubky TLS, through homeserver-proxy (in-namespace clients reach the homeserver on 6287 directly)
-      - "127.0.0.1:6298:6298" # homeserver-proxy control: delay or fail one identity's requests
-      - "127.0.0.1:${MARKETPLACE_HOMESERVER_ADMIN_PORT:-16288}:6288" # homeserver admin (6288 is homegate's)
-      - "127.0.0.1:${MARKETPLACE_PAYKIT_PORT:-3001}:3001" # paykit-server, shares this namespace
-      - "127.0.0.1:3012:3012" # opt-in fixture-issuer, shares this namespace
-      - "127.0.0.1:3013:3013" # opt-in rc56-peer, shares this namespace
+      - "127.0.0.1:23298:6298" # homeserver-proxy control: delay or fail one identity's requests
+      - "127.0.0.1:${MARKETPLACE_HOMESERVER_ADMIN_PORT:-23288}:6288" # homeserver admin (6288 is homegate's)
+      - "127.0.0.1:${MARKETPLACE_PAYKIT_PORT:-23101}:3001" # paykit-server, shares this namespace
+      - "127.0.0.1:23012:3012" # opt-in fixture-issuer, shares this namespace
+      - "127.0.0.1:23013:3013" # opt-in rc56-peer, shares this namespace
 
   # Paykit Server 0ffd4da, the head of pubky/paykit-server#46 (paykit-rs rc65, the version both apps pin; Pubky 0.14.0; move to its merge or
   # release once #46 lands), built from source with the upstream

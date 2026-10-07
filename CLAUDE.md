@@ -135,7 +135,7 @@ bitkit-docker/
 This is a development/testing environment. Test manually using:
 
 - `curl` commands for API endpoints
-- Browser for UI pages at `http://localhost:3000`
+- Browser for UI pages at `http://localhost:23000`
 - Bitkit app for end-to-end testing (see README.md)
 
 ### Key Endpoints to Test

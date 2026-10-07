@@ -10,11 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Rebuild the Paykit fixtures on the paykit-rs version a Bitkit pull request pins with `scripts/follow-app-paykit`
 - Withhold and restore the payment request issuer's endpoints with `POST /endpoints`, so a journey can make the app's request resolution fail and recover
-- Route the apps' homeserver traffic through `homeserver-proxy`, whose control port (6298) delays or fails one identity's homeserver requests by path
+- Route the apps' homeserver traffic through `homeserver-proxy`, whose control port (23298) delays or fails one identity's homeserver requests by path
 - Hold LNURL-pay fixture callbacks with a `delay` mode, issue real invoices of the project's LND, and give a wallet a funded channel to it through LNURL-channel
 - Issue payment requests payable through an LNURL-pay endpoint, with a separate proposal expiry
 
 ### Changed
+- Publish every host port at 1024 or above, in the 23000-23999 range for the services Bitkit does not dial by a fixed number (README "Ports" lists them)
 - Move the payment request fixture peers to paykit-rs rc65 on Pubky 0.14.0, the SDK current Bitkit builds pin (the `fixture-issuer` and `rc56-peer` service names stay)
 - Move the marketplace fixture to the Pubky 0.14.0 homeserver, which grants the `LOCK` write locks current Bitkit builds take, with Paykit Server `0ffd4da` (pubky/paykit-server#46, paykit-rs rc65, locks-core rc8) and the driver on `@synonymdev/pubky` 0.14.0
 - Show ready-to-copy settle and cancel commands in `holdinvoice` output
