@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# Keep the Paykit fixtures on the paykit-rs version a Bitkit pull request pins.
+# Reads the pin at the PR head (Android: gradle/libs.versions.toml, iOS: Package.resolved), compares it with the
+# paykit-rs commit the local fixture images were built from, and rebuilds and retags the ones that differ.
+# Usage: scripts/follow-app-paykit <owner/repo> <head sha | pull number> [--check]
+#   --check   only print the pin and what would be rebuilt (exit 3 when something is out of date)
+# Exit 4: no Paykit Server revision (the linked pubky/paykit-server PR, else master) locks the app's paykit-rs version.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+FIXTURE=bitkit-docker/payment-request-fixture
+SERVER=bitkit-docker/paykit-server
+DRIVER=bitkit-docker/marketplace-driver
+PAYKIT_RS=https://github.com/pubky/paykit-rs
+
+die() { echo "follow-app-paykit: $*" >&2; exit 1; }
+[ $# -ge 2 ] || die "usage: $0 <owner/repo> <head sha | pull number> [--check]"
+repo="$1" ref="$2" check="${3:-}"
+
+pr=""
+if [[ "$ref" =~ ^[0-9]+$ ]]; then
+  pr="$ref"
+  ref=$(git ls-remote "https://github.com/$repo" "refs/pull/$ref/head" | cut -f1)
+  [ -n "$ref" ] || die "no head for $repo#$2"
+fi
+raw() { curl -fsS "https://raw.githubusercontent.com/$repo/$ref/$1"; }
+
+case "$repo" in
+  */bitkit-android)
+    version=$(raw gradle/libs.versions.toml | sed -n 's|.*com\.synonym:paykit-android", version = "\([^"]*\)".*|\1|p' | head -1)
+    rev=$(git ls-remote "$PAYKIT_RS" "refs/tags/v$version^{}" | cut -f1)
+    ;;
+  */bitkit-ios)
+    resolved=$(raw Bitkit.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved)
+    version=$(jq -r '.pins[] | select(.identity=="paykit-rs") | .state.version // empty' <<<"$resolved")
+    rev=$(jq -r '.pins[] | select(.identity=="paykit-rs") | .state.revision' <<<"$resolved")
+    ;;
+  *) die "$repo is not a Bitkit app repository" ;;
+esac
+[ -n "${version:-}" ] && [ -n "${rev:-}" ] || die "no paykit-rs pin found in $repo at $ref"
+short="${version##*-}"   # 0.1.0-rc65 -> rc65
+echo "$repo@${ref:0:7} pins paykit-rs $version ($rev)"
+
+# The tags Compose and the lanes start (COMPOSE_FILE overrides included), kept pointing at the image built for the pin.
+compose_tags() {
+  docker compose --profile marketplace --profile payment-requests config --format json |
+    jq -r --arg repo "$1" '.services[].image // empty | select(startswith($repo + ":")) | ltrimstr($repo + ":")' | sort -u
+}
+
+# The paykit-rs commit an image was built from: its label, else the file the fixture image carries.
+built_rev() {
+  local label
+  label=$(docker image inspect --format '{{ index .Config.Labels "tech.masivo.paykit-rs" }}' "$1" 2>/dev/null || true)
+  [ -n "$label" ] && [ "$label" != "<no value>" ] && { echo "$label"; return; }
+  docker run --rm --entrypoint cat "$1" /usr/local/share/paykit-rs-rev 2>/dev/null || true
+}
+api() { curl -fsS -H 'Accept: application/vnd.github+json' "https://api.github.com/$1"; }
+
+no_buildkit_dockerfile() {
+  # The QA boxes' Docker has no BuildKit: drop the cache mounts, keep everything else.
+  sed -E -e 's/^RUN --mount=[^ ]+ \\/RUN \\/' -e '/^[[:space:]]+--mount=/d' "$1" > "$2"
+}
+
+stale=0
+fixture_built=0
+current=$(built_rev "$FIXTURE:$short-shared")
+if [ "$current" = "$rev" ]; then
+  echo "fixture: $FIXTURE:$short-shared is built from $rev"
+else
+  stale=1
+  echo "fixture: $FIXTURE:$short-shared is built from ${current:-nothing}; needs $rev"
+  if [ "$check" != --check ]; then
+    dockerfile=payment-requests/Dockerfile
+    if ! docker buildx version >/dev/null 2>&1; then
+      no_buildkit_dockerfile payment-requests/Dockerfile payment-requests/.Dockerfile.nobuildkit
+      dockerfile=payment-requests/.Dockerfile.nobuildkit
+    fi
+    start=$SECONDS
+    docker build -q -f "$dockerfile" --build-arg "PAYKIT_RS_REV=$rev" -t "$FIXTURE:$short-shared" payment-requests
+    rm -f payment-requests/.Dockerfile.nobuildkit
+    echo "fixture: built $FIXTURE:$short-shared in $((SECONDS - start))s"
+    fixture_built=1
+  fi
+fi
+if [ "$check" != --check ]; then
+  for tag in $(compose_tags "$FIXTURE"); do
+    [ "$tag" = "$short-shared" ] || { docker tag "$FIXTURE:$short-shared" "$FIXTURE:$tag"; echo "fixture: $FIXTURE:$tag -> $short-shared"; }
+  done
+fi
+
+# Paykit Server: built from the Paykit Server pull request the app PR links (its merge commit once merged), else master,
+# provided that revision pins the same paykit-rs tag; the driver is rebuilt with it, since it carries the server's helpers.
+server_tags=$(compose_tags "$SERVER")
+server_image="$SERVER:$(head -1 <<<"$server_tags")"
+server_rev=$(built_rev "$server_image")
+if [ "$server_rev" = "$rev" ] && [ "$fixture_built" = 0 ]; then
+  echo "paykit-server: $server_image is built from $rev"
+else
+  if [ "$server_rev" = "$rev" ]; then
+    # the driver carries the fixture's `paykit-key-authorization`: rebuild it on the server revision already built
+    server=$(docker image inspect --format '{{ index .Config.Labels "tech.masivo.paykit-server" }}' "$server_image")
+    from="the revision $server_image was built from"
+    echo "driver: the fixture was rebuilt; rebuilding the driver on $from (${server:0:7})"
+  else
+    stale=1
+    echo "paykit-server: $server_image is built from ${server_rev:-an unrecorded paykit-rs}; needs $rev"
+    [ -n "$pr" ] || pr=$(api "repos/$repo/commits/$ref/pulls" | jq -r --arg ref "$ref" '[.[] | select(.head.sha == $ref)][0].number // empty')
+    linked=$( [ -n "$pr" ] && api "repos/$repo/pulls/$pr" | jq -r '.body // ""' |
+      grep -o 'github\.com/pubky/paykit-server/pull/[0-9]*' | head -1 | sed 's|.*/||' || true)
+    if [ -n "$linked" ]; then
+      server=$(api "repos/pubky/paykit-server/pulls/$linked" | jq -r 'if .merged then .merge_commit_sha else .head.sha end')
+      from="pubky/paykit-server#$linked"
+    else
+      server=$(api repos/pubky/paykit-server/commits/master | jq -r .sha)
+      from="pubky/paykit-server master"
+    fi
+  fi
+  lock=$(curl -fsS "https://raw.githubusercontent.com/pubky/paykit-server/$server/Cargo.lock")
+  if ! grep -Fq "paykit-rs.git?tag=v$version#$rev" <<<"$lock"; then
+    echo "paykit-server: $from (${server:0:7}) does not lock paykit-rs v$version; no Paykit Server revision to build" >&2
+    exit 4
+  fi
+  locks=$(sed -n 's|^source = "git+https://github.com/pubky/locks.git?tag=\([^#]*\)#\([0-9a-f]*\)"|\1 \2|p' <<<"$lock" | head -1)
+  echo "paykit-server: $from at ${server:0:7} locks paykit-rs v$version and locks ${locks%% *}"
+  if [ "$check" != --check ]; then
+    start=$SECONDS
+    PAYKIT_SERVER_REV=$server PAYKIT_RS_REV=$rev PAYKIT_RS_TAG=v$version LOCKS_TAG=${locks%% *} LOCKS_REV=${locks##* } ./pubky-marketplace build-paykit
+    echo "paykit-server: built $SERVER:${server:0:7} and $DRIVER:${server:0:7} in $((SECONDS - start))s"
+    for tag in $server_tags; do
+      [ "$tag" = "${server:0:7}" ] || { docker tag "$SERVER:${server:0:7}" "$SERVER:$tag"; echo "paykit-server: $SERVER:$tag -> ${server:0:7}"; }
+    done
+    for tag in $(compose_tags "$DRIVER"); do
+      [ "$tag" = "${server:0:7}" ] || { docker tag "$DRIVER:${server:0:7}" "$DRIVER:$tag"; echo "driver: $DRIVER:$tag -> ${server:0:7}"; }
+    done
+  fi
+fi
+
+[ "$check" = --check ] && [ "$stale" = 1 ] && exit 3
+exit 0

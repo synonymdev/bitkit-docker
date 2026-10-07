@@ -12,7 +12,7 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
 - **VSS Server**: Versioned Storage Server for app and ldk-node state backups
 - **Homegate**: Pubky Homeserver signup gatekeeper with local admin API mock
 - **Pubky marketplace fixture** (opt-in `marketplace` profile): Pubky testnet, Paykit Server and a purchase driver for the marketplace wallet journey
-- **Payment Request fixture** (opt-in `payment-requests` profile): rc62 issuer and controlled peer on the marketplace Pubky testnet
+- **Payment Request fixture** (opt-in `payment-requests` profile): rc65 issuer and controlled peer on the marketplace Pubky testnet
 
 ## Quick Start
 
@@ -240,7 +240,7 @@ docker compose logs -f bitcoind
 
 #### Payment Requests and Deadline History
 
-The `payment-requests` profile starts two disposable Paykit rc62 SDK peers (paykit-rs `f2c5f712`, Pubky 0.14.0) on
+The `payment-requests` profile starts two disposable Paykit rc65 SDK peers (paykit-rs `7185ae7`, Pubky 0.14.0) on
 the marketplace fixture's Pubky testnet. `fixture-issuer` publishes a regtest
 Paykit endpoint and sends one-time requests. `rc56-peer` can accept, reject,
 cancel and pay requests through the shared regtest Bitcoin node. Plain
@@ -304,7 +304,7 @@ Pubky testnet's network namespace, so `./pubky-marketplace down` and `reset`
 remove them together with the testnet. After `reset`, start them again with the
 `up -d --no-build fixture-issuer rc56-peer` command above, wait for `/health`,
 rerun `payment-requests/prepare` and relink the app. `./pubky-marketplace seed`
-needs outbound internet for Paykit Server setup; the rc62 peer calls use the
+needs outbound internet for Paykit Server setup; the rc65 peer calls use the
 local testnet. The lane still needs a Bitkit build pointed at the local Pubky
 testnet and to verify the requested rows on device. The headless preparation
 command does not populate a separate Bitkit identity's history; accepted and
@@ -335,6 +335,25 @@ its request with that empty list, so the request names an endpoint the app
 cannot resolve (`"endpoints_withheld": true` in its answer). `restore`
 publishes the endpoint again and sends the peer the full list; the app's next
 attempt resolves it. Without `peer_pubky`, only the public endpoint changes.
+
+#### Following the apps' Paykit pin
+
+The Paykit fixtures must run the paykit-rs version the app under test pins: the payment request peers
+(`payment-request-fixture:rc65-shared`, paykit-rs `7185ae7`, v0.1.0-rc65) and Paykit Server (built from
+the head of [pubky/paykit-server#46](https://github.com/pubky/paykit-server/pull/46), `0ffd4da`, until it
+merges or is released). Each image records the paykit-rs commit it was built from (label
+`tech.masivo.paykit-rs`, or `/usr/local/share/paykit-rs-rev` in the peers' image).
+
+```bash
+scripts/follow-app-paykit synonymdev/bitkit-android 1401 --check   # print the pin and what is out of date (exit 3)
+scripts/follow-app-paykit synonymdev/bitkit-ios a6846779a71081f262f47883570125bd541b4fd6
+```
+
+It reads the pin at the PR head (Android `gradle/libs.versions.toml`, iOS `Package.resolved`), rebuilds the
+peers' image as `payment-request-fixture:<rc>-shared` when it was built from another commit, and builds
+Paykit Server and the driver from the Paykit Server PR the app PR links (its merge commit once merged),
+else from master, when that revision locks the same paykit-rs tag (exit 4 when none does). Afterwards every
+tag Compose resolves for those images, `COMPOSE_FILE` overrides included, points at the new build.
 
 #### Homeserver proxy (selective delay)
 
@@ -511,7 +530,7 @@ Then, with the buyer wallet:
 
 Pay the request in the app, then confirm with `./pubky-marketplace mine --bundle <bundle>`, `./pubky-marketplace wait <bundle> confirmed` and `./pubky-marketplace status <bundle>`. By default the seller of a purchase is the fixture's headless seller, and `verify` always uses it.
 
-To make a Bitkit wallet the seller, the wallet approves two Pubky requests for the same identity: the Paykit watch-only setup (it gives Paykit Server the wallet's account xpub, so payouts land in that wallet) and a write grant on `/pub/locks.app/` (the role Locks plays: the driver publishes the payment lock with the granted session). One request cannot carry both, because the apps accept the watch-only claim only for exactly the two Paykit paths.
+To make a Bitkit wallet the seller, the wallet approves two Pubky requests for the same identity: the Paykit watch-only setup (it gives Paykit Server the wallet's account xpub, so payouts land in that wallet) and a write grant on `/pub/app.locks/` (the role Locks plays: the driver publishes the payment lock with the granted session). One request cannot carry both, because the apps accept the watch-only claim only for exactly the two Paykit paths.
 
 ```bash
 ./pubky-marketplace seed --buyer none            # once per fixture; the headless seller stays unused
