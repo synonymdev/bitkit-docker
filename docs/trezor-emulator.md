@@ -19,10 +19,9 @@ docker compose --profile trezor-emulator exec -T trezor-emulator \
   /trezor-user-env/.venv/bin/python3 /opt/bitkit-trezor/trezor-fixture-check.py
 ```
 
-Ports: Bridge legacy `21325`, Bridge current `21328`, controller `9004`, dashboard
-`9005`, and noVNC `6080`. The controller and dashboard are published on different
-ports from the manual User Env to avoid collisions with the regtest services when
-several projects use blocks of 1000 ports. Docker-backed simulator seats remap
+Ports: Bridge legacy `21325`, Bridge current `21328`, controller `23901`, dashboard
+`23902`, and noVNC `23680`. The controller is published on a different port from
+the manual User Env's `9001`, which Bitkit's UI tests dial. Docker-backed simulator seats remap
 these base ports and forward them to their seat's loopback address. Declare this
 profile as an on-demand offer; run no global shared device instance.
 
@@ -105,7 +104,7 @@ Run Bitkit from Xcode on the relevant Trezor branch, then open `Settings -> Adva
 
 The User Env dashboard and Bridge remain available at the same localhost endpoints:
 
-- User Env dashboard: <http://localhost:9002>
+- User Env dashboard: <http://localhost:23902>
 - Trezor Bridge: <http://localhost:21325>
 
 ## Smoke Checklist
@@ -128,7 +127,7 @@ Use this checklist when reviewing any Bitkit app PR that needs the Trezor emulat
 ./scripts/trezor-emulator stop
 ```
 
-Open the User Env dashboard at <http://localhost:9002>. Trezor Bridge listens at <http://localhost:21325>.
+Open the User Env dashboard at <http://localhost:23902>. Trezor Bridge listens at <http://localhost:21325>.
 
 ## Troubleshooting
 

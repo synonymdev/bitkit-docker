@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 CONTROLLER_SCRIPT="$ROOT_DIR/scripts/trezor-controller.py"
 
-DASHBOARD_URL="${TREZOR_DASHBOARD_URL:-http://localhost:9002}"
+DASHBOARD_URL="${TREZOR_DASHBOARD_URL:-http://localhost:23902}"
 BRIDGE_URL="${TREZOR_BRIDGE_URL:-http://localhost:21325}"
 BRIDGE_PORT="${TREZOR_BRIDGE_PORT:-21325}"
 

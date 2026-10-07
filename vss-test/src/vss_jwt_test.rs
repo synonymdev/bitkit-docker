@@ -18,7 +18,7 @@ struct TestClaims {
     exp: i64,
 }
 
-const VSS_URL: &str = "http://localhost:5050";
+const VSS_URL: &str = "http://localhost:23050";
 
 // Path to private key used by lnurl-server for JWT
 const VALID_PRIVATE_KEY_PATH: &str = "../lnurl-server/keys/private.pem";

@@ -24,7 +24,7 @@ PAYKIT_SERVER_PATCHES=$(cd marketplace/patches 2>/dev/null && ls paykit-server-*
 export PAYKIT_SERVER_PATCHES
 PAYKIT_SERVER_IMAGE=bitkit-docker/paykit-server:$PAYKIT_SERVER_TAG
 DRIVER_IMAGE=bitkit-docker/marketplace-driver:$PAYKIT_SERVER_TAG
-PAYKIT_PORT="${MARKETPLACE_PAYKIT_PORT:-3001}"
+PAYKIT_PORT="${MARKETPLACE_PAYKIT_PORT:-23101}"
 COMPOSE=(docker compose --profile marketplace)
 CHAIN_SERVICES=(bitcoind bitcoinsetup electrs)
 FIXTURE_SERVICES=(marketplace-postgres pubky-testnet homeserver-proxy paykit-server)

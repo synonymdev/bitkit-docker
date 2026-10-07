@@ -555,7 +555,7 @@ async function publicInfo() {
       http_relay: 'http://localhost:15412',
       dht: 'localhost:6881',
     },
-    paykit_server: { url: 'http://localhost:3001', receiver_path: SERVER_PATH, network: 'regtest' },
+    paykit_server: { url: 'http://localhost:23101', receiver_path: SERVER_PATH, network: 'regtest' },
     electrum: 'tcp://127.0.0.1:60001',
     chain,
     seller: fixture.seller
