@@ -28,7 +28,7 @@ raw() { curl -fsS "https://raw.githubusercontent.com/$repo/$ref/$1"; }
 case "$repo" in
   */bitkit-android)
     version=$(raw gradle/libs.versions.toml | sed -n 's|.*com\.synonym:paykit-android", version = "\([^"]*\)".*|\1|p' | head -1)
-    rev=$(git ls-remote "$PAYKIT_RS" "refs/tags/v$version^{}" | cut -f1)
+    rev=$(git ls-remote "$PAYKIT_RS" "refs/tags/v$version^{}" "refs/tags/v$version" | sort -k2 -r | head -n 1 | cut -f1) # the peeled commit of an annotated tag, else the lightweight tag's
     ;;
   */bitkit-ios)
     resolved=$(raw Bitkit.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved)
