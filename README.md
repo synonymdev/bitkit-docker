@@ -302,6 +302,23 @@ so `/health` fails for a few seconds after `up`. The loop waits for them, and
 its setup for two minutes and then exits; if the loop does not end, stop it and
 read `docker compose --profile marketplace --profile payment-requests logs fixture-issuer rc56-peer`.
 
+For a contact-link lifecycle test, run `./payment-requests/prepare --link-only`
+before installing the app. It returns `{"link":"linked",...}` only after two
+disposable SDK peers have signed up, published their endpoints, and completed a
+private handshake on the local testnet. This checks the Pubky write-lock path
+without creating payment requests. A failure leaves the device test unstarted;
+inspect the peer and `pubky-testnet` logs. The preflight does not stand in for
+the app's own background and resume check.
+
+Build the Android app with `E2E=true E2E_BACKEND=local`,
+`E2E_HOMESERVER_PUBKY` from `./pubky-marketplace info | jq -r .homeserver_z32`,
+and `E2E_LOCAL_HOST=127.0.0.1`. On each test device, reverse ports 6286,
+6287, 6288, 15411, 15412 and 60001 to that device's own fixture project before
+first launch. Use two fresh app identities on this testnet and save each other
+as contacts. This keeps the held SDK call on a local Pubky server that supports
+`LOCK` and `UNLOCK`; a staging build reaches the public homeserver instead.
+After the test, remove any selective `homeserver-proxy` rules set for it.
+
 Each `/health` response gives the identity, receiver path and published
 `btc-regtest-p2wpkh` address. Prepare and verify all one-time J1 states plus
 an accepted monthly subscription with one paid period and a new monthly

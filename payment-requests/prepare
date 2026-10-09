@@ -3,6 +3,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != "--link-only" ]; }; then
+  echo 'usage: payment-requests/prepare [--link-only]' >&2
+  exit 2
+fi
+
 # The host ports compose publishes the two peers on; a project that remaps them sets these.
 issuer_port="${FIXTURE_ISSUER_PORT:-23012}"
 peer_port="${RC56_PEER_PORT:-23013}"
@@ -63,6 +68,15 @@ done
 if [ "$linked" != true ]; then
   echo 'Paykit peers did not link' >&2
   exit 1
+fi
+
+# A lifecycle test only needs to establish that the local Pubky homeserver
+# accepts the SDK's writes and that two peers can finish a private handshake.
+# Keep its preflight separate from the payment-request history setup below.
+if [ "${1:-}" = "--link-only" ]; then
+  jq -nc --arg issuer "$(jq -r .pubky <<<"$issuer")" --arg peer "$(jq -r .pubky <<<"$peer")" \
+    '{link:"linked",issuer:$issuer,peer:$peer}'
+  exit 0
 fi
 
 issue() {
