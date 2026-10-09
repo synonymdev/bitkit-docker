@@ -416,7 +416,7 @@ Paykit Server and the driver from the Paykit Server PR the app PR links (its mer
 else from master, when that revision locks the same paykit-rs tag (exit 4 when none does). Afterwards every
 tag Compose resolves for those images, `COMPOSE_FILE` overrides included, points at the new build.
 
-#### Homeserver proxy (selective delay)
+#### Homeserver proxy (explicit holds and selective faults)
 
 The apps reach the testnet homeserver through `homeserver-proxy`, which the
 marketplace profile starts with the testnet: the host's 6287 (Pubky TLS) goes
@@ -425,25 +425,100 @@ forwards every request to the homeserver's plain HTTP on 6286. Clients inside
 the testnet's namespace (Paykit Server, the payment request peers) still reach
 the homeserver on 6287 directly. Without rules the proxy only forwards.
 
-Its control port, published on 23298 (6298 in the container), delays or fails the requests of one identity whose
-owner-relative path starts with `path` (empty matches every path):
+The control port is 23298 (6298 in the container). `POST /rules` installs a rule
+for a `pubky` identity and owner-relative `path` prefix (empty matches every
+path). The optional `method` restricts it to one HTTP method, normalized to
+uppercase. Method-specific rules take precedence over rules for every method;
+within those groups the longest path wins. Keys take z32 with or without the
+`pubky` prefix. A rule with the same identity, path and method replaces the old
+rule and releases its existing waiters with their original response behavior.
+
+Use `hold: true` for an overlap or publication barrier. It has **no timer**:
+every matching request waits until its rule is released or replaced. A client
+can still cancel its own request; the rule stays installed for retries.
+`delay_ms` keeps the earlier timed-delay behavior and cannot be combined with
+`hold`. `status` injects a response instead of forwarding, after any hold or
+delay. A rule containing only `status: 404` persists until removed, so SDK
+reads cannot start seeing published records because a delay expired.
 
 ```bash
-# hold one identity's own-profile reads for 20 s
-curl -fsS -X POST http://127.0.0.1:23298/rules -H 'content-type: application/json' \
-  -d "$(jq -nc --arg pubky "$APP_PUBKY" '{pubky:$pubky,path:"/pub/pubky.app/profile.json",delay_ms:20000}')" | jq
-# fail them instead (after an optional delay): add "status": 503
-curl -fsS http://127.0.0.1:23298/rules | jq
-curl -fsS http://127.0.0.1:23298/requests | jq '.requests[-20:]'   # owner, path, status, delayed_ms of recent requests
-curl -fsS -X DELETE http://127.0.0.1:23298/rules | jq             # remove every rule
+PROXY=http://127.0.0.1:23298 # use the control port published by your own seat
+# Identity barrier: install before the request, then gate its arrival.
+curl -fsS -X POST "$PROXY/rules" -H 'content-type: application/json' \
+  -d "$(jq -nc --arg pubky "$APP_PUBKY" '{pubky:$pubky,path:"/pub/pubky.app/profile.json",method:"GET",hold:true}')"
+python3 scripts/homeserver-wait.py --control "$PROXY" --owner "$APP_PUBKY" \
+  --path /pub/pubky.app/profile.json --method GET --timeout 30
+
+# Withdrawal and re-publication barriers: arm BOTH before starting either operation.
+# Narrow path to the relevant records when known; empty covers all this identity's paths.
+for method in DELETE PUT; do
+  curl -fsS -X POST "$PROXY/rules" -H 'content-type: application/json' \
+    -d "$(jq -nc --arg pubky "$APP_PUBKY" --arg method "$method" '{pubky:$pubky,path:"",method:$method,hold:true}')"
+done
+# Call after the run initiates both operations. Exit 0 requires both to be pending
+# in the SAME response, before taking the run's assignment/state snapshot.
+python3 scripts/homeserver-wait.py --control "$PROXY" --owner "$APP_PUBKY" \
+  --method DELETE --method PUT --timeout 30
+
+# Missing-peer barrier: arm before fresh peer B starts publishing.
+curl -fsS -X POST "$PROXY/rules" -H 'content-type: application/json' \
+  -d "$(jq -nc --arg pubky "$PEER_PUBKY" '{pubky:$pubky,path:"",method:"PUT",hold:true}')"
+# Preserve missing-record responses through all resumed SDK work, even if a write retries.
+curl -fsS -X POST "$PROXY/rules" -H 'content-type: application/json' \
+  -d "$(jq -nc --arg pubky "$PEER_PUBKY" '{pubky:$pubky,path:"",method:"GET",status:404}')"
+python3 scripts/homeserver-wait.py --control "$PROXY" --owner "$PEER_PUBKY" --method PUT --timeout 30
+curl -fsS "$PROXY/requests" | jq '{pending, missing_reads:[.requests[] | select(.status == 404)]}'
+
+# Release only this publication barrier; the GET 404 fault remains until released separately.
+curl -fsS -X POST "$PROXY/rules/release" -H 'content-type: application/json' \
+  -d "$(jq -nc --arg pubky "$PEER_PUBKY" '{pubky:$pubky,path:"",method:"PUT"}')"
+# Repeat with method GET to restore peer reads when the run needs recovery.
+# Always clear remaining rules in the run's cleanup, including after a failed wait.
+curl -fsS -X DELETE "$PROXY/rules"
 ```
 
-A rule with the same `pubky` and `path` replaces the earlier one. `pubky`
-takes the z32 key with or without its `pubky` prefix. `/requests` lists the
-last 200 requests, which shows the paths an app reads for an identity;
-`docker compose logs homeserver-proxy` prints the same lines. Set rules before
-the app makes the request: a held request waits on its open connection, and
-requests that reach the homeserver before the rule are not held.
+`GET /requests` contains `pending` (currently held requests, with id, arrival
+time, owner, method, path and matched rule path) and `requests` (last 200
+completed requests, including actual `delayed_ms` and `held`). Keep the pending
+snapshot beside the run's state snapshot and confirm the barrier is still
+pending at that point. Verify the resumed SDK's exact peer paths have logged
+404 responses before calling a missing-record fault established; a publication
+hold alone does not prove it. All these faults apply only to clients routed
+through the proxy, not the in-namespace peers.
+
+`scripts/homeserver-wait.py` requires Python 3 only. Its timeout exits nonzero
+with the last snapshot; it never releases rules or treats completed requests
+as pending. Do not infer overlap from a configured rule or a sleep.
+
+To install an updated proxy into an already leased seat, build a uniquely tagged
+image from the fix's pinned checkout and replace **only** that seat's proxy.
+Use the generated seat Compose files and project, not a new base stack:
+
+```bash
+# FIXTURE_TREE is the pinned bitkit-docker fix checkout copied to this box.
+# Keep the seat's existing COMPOSE_FILE and COMPOSE_PROJECT_NAME from its seat environment.
+FIX_REV=$(git -C "$FIXTURE_TREE" rev-parse HEAD)
+PROXY_IMAGE=bitkit-docker/homeserver-proxy:$FIX_REV
+docker build -t "$PROXY_IMAGE" -f "$FIXTURE_TREE/payment-requests/Dockerfile" "$FIXTURE_TREE/payment-requests"
+# Create this override in the seat's own fixture directory.
+cat > homeserver-proxy.override.yaml <<EOF
+services:
+  homeserver-proxy:
+    image: $PROXY_IMAGE
+EOF
+COMPOSE_FILE="$COMPOSE_FILE:$PWD/homeserver-proxy.override.yaml" \
+  docker compose --profile marketplace up -d --no-deps --no-build --force-recreate homeserver-proxy
+curl -fsS "$PROXY/health" # ok
+curl -fsS "$PROXY/requests" | jq -e 'has("pending")'
+```
+
+For a fresh standalone fixture checkout, `docker compose --profile marketplace
+up -d --build homeserver-proxy` starts the testnet and proxy. Verify the fixture
+itself without driving an app: `cargo test --locked --manifest-path
+payment-requests/Cargo.toml --bin homeserver-proxy` exercises raw-public-key TLS,
+explicit holds, independent releases, persistent 404 reads and healthy forwarding;
+`python3 -m unittest discover -s scripts -p test_homeserver_wait.py` checks the
+arrival gate.
 
 #### Trezor Hardware PRs
 
