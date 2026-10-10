@@ -17,6 +17,9 @@ test, for example a Paykit version the staging Paykit Server does not run.
 | Lock Server | pubky/locks v0.1.0-rc10, 01cfeca14c7b5d385d8c3536c0cb4e1af81b458c | the repository's Dockerfile |
 | Paykit Server | v0.1.0-rc11, 662dca0619a9aa2962bcd677bd5ddd4563cd2784 (paykit-rs ad3c7224 = rc72) | `marketplace/shop-mixed` |
 
+The Shop was tested at fbe3babb; pubky/pubky-marketplace#154 later moved to 84934516 for review changes to the seller-readiness
+source and the buyer key-record gate, with the Locks payment path unchanged. The pin stays at the tested commit until #154 merges.
+
 `./shop-order fetch` checks out each source at exactly that commit and refuses another. These are the commits the Android
 (aa330959, devDebug) and iOS (bb02e835, Debug) order-paid acceptance ran on, on 10 Oct.
 
