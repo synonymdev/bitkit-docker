@@ -1,0 +1,8 @@
+# The marketplace driver for the shop-mixed profile (MARKETPLACE_BACKEND=staging). Bitkit wallets play the seller and the buyer on
+# staging, so it carries none of the headless helpers the local image copies from the Paykit Server and payment request images.
+FROM node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+COPY driver.mjs ./
+ENV MARKETPLACE_BACKEND=staging

@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Shop on staging with our own Paykit Server (profile "shop-mixed"): Paykit Server v0.1.0-rc11 on Synonym's staging homeserver and
+# Blocktank's staging regtest chain, behind a Cloudflare quick tunnel. Docs: docs/shop-mixed.md and the README section "Shop on staging".
+set -euo pipefail
+
+CLI_NAME="$(basename "$0")"
+cd "$(dirname "$0")"
+
+COMPOSE=(docker compose --profile shop-mixed)
+SERVICES=(shop-mixed-postgres shop-mixed-driver shop-mixed-paykit shop-mixed-tunnel)
+
+compose() { "${COMPOSE[@]}" "$@"; }
+progress() { echo "[${CLI_NAME}] $*" >&2; }
+
+# Where the project publishes a container port on loopback (a QA seat's project publishes at its own port block).
+published() { compose port "$1" "$2" 2>/dev/null | sed -n 's/.*:\([0-9]*\)$/127.0.0.1:\1/p' | head -1; }
+
+show_help() {
+  cat <<HELP
+Usage: ${CLI_NAME} <command> [args]
+
+Stack:
+  build                 Build Paykit Server v0.1.0-rc11, the driver and the tunnel image
+  up                    Start Postgres, Paykit Server and the tunnel; print the public URL and the server's health
+  url                   The tunnel's public URL (https://<words>.trycloudflare.com)
+  health                Paykit Server's /health/ready on loopback and through the tunnel, and the image's pinned revisions
+  logs [service]        Follow a service's logs (default shop-mixed-paykit)
+  down                  Remove the stack and its volumes
+
+Marketplace (the driver, MARKETPLACE_BACKEND=staging; Bitkit wallets are the seller and the buyer):
+  setup-url [--serial S]   Start a Paykit setup for the Bitkit seller; prints the grant link and the public setup page
+  setup-wait <flow>        Wait for the seller's setup to complete
+  seller-auth [--timeout N] [--serial S]  The marketplace's write grant on the seller's /pub/app.locks/ (staging relay)
+  purchase --buyer <pubky> [--sats N]     Publish a payment lock and create the invoice for the Bitkit buyer
+  status [bundle] | wait <bundle> <detected|confirmed> [seconds]
+  mine [--count N]         Mine on Blocktank's staging regtest chain
+  info                     Homeserver, relay, Electrum, the public URL, the seller and the purchases
+HELP
+}
+
+driver() {
+  mkdir -p .marketplace/evidence
+  compose run --rm --no-deps --quiet-build -T shop-mixed-driver "$@"
+}
+
+url() {
+  local host
+  host=$(curl -fsS "http://$(published shop-mixed-tunnel 23111)/quicktunnel" | sed -n 's/.*"hostname":"\([^"]*\)".*/\1/p')
+  [ -n "$host" ] || { echo "the tunnel has no hostname yet; see: ${CLI_NAME} logs shop-mixed-tunnel" >&2; return 1; }
+  echo "https://$host"
+}
+
+wait_ready() {
+  local deadline=$(($(date +%s) + ${1:-180})) base
+  until curl -fsS -o /dev/null "http://$(published shop-mixed-paykit 3001)/health/ready" 2>/dev/null; do
+    [ "$(date +%s)" -lt "$deadline" ] || { echo "Paykit Server did not become ready; see: ${CLI_NAME} logs" >&2; exit 1; }
+    sleep 2
+  done
+  deadline=$(($(date +%s) + ${1:-180}))
+  until base=$(url 2>/dev/null) && curl -fsS -o /dev/null "$base/health/ready" 2>/dev/null; do
+    [ "$(date +%s)" -lt "$deadline" ] || { echo "the tunnel does not reach Paykit Server; see: ${CLI_NAME} logs shop-mixed-tunnel" >&2; exit 1; }
+    sleep 3
+  done
+}
+
+health() {
+  local base image
+  image=$(compose config --format json | jq -r '.services["shop-mixed-paykit"].image')
+  echo "image: $image"
+  docker image inspect --format 'paykit-server {{ index .Config.Labels "tech.masivo.paykit-server" }} ({{ index .Config.Labels "tech.masivo.paykit-server-tag" }}), paykit-rs {{ index .Config.Labels "tech.masivo.paykit-rs" }}' "$image"
+  echo "loopback: $(curl -fsS "http://$(published shop-mixed-paykit 3001)/health/ready")"
+  base=$(url)
+  echo "tunnel: $base"
+  echo "tunnel /health/ready: $(curl -fsS "$base/health/ready")"
+}
+
+case "${1:-help}" in
+  build) compose build "${SERVICES[@]}" ;;
+  up)
+    mkdir -p .marketplace/evidence
+    progress "starting Postgres, the driver's init, Paykit Server and the tunnel"
+    compose up -d --build "${SERVICES[@]}"
+    progress "waiting for Paykit Server, on loopback and through the tunnel"
+    wait_ready
+    health
+    ;;
+  url) url ;;
+  health) health ;;
+  logs) shift; compose logs -f --tail 100 "${@:-shop-mixed-paykit}" ;;
+  down)
+    compose rm -sfv "${SERVICES[@]}" >/dev/null
+    docker volume rm "$(compose config --format json | jq -r '.name')_shop_mixed_state" "$(compose config --format json | jq -r '.name')_shop_mixed_postgres_data" >/dev/null 2>&1 || true
+    ;;
+  init | info | setup-url | setup-wait | seller-auth | purchase | status | wait | mine) driver "$@" ;;
+  help | -h | --help) show_help ;;
+  *) show_help >&2; exit 2 ;;
+esac
