@@ -618,6 +618,99 @@ services:
       FIXTURE_PORT: 3013
       BITCOIN_RPC_URL: http://bitcoind:43782
 
+  # ---------------------------------------------------------------------------
+  # Shop on staging with our own Paykit Server (profile "shop-mixed"). Paykit Server v0.1.0-rc11 (662dca06, paykit-rs ad3c7224 =
+  # v0.1.0-rc72, the version the Bitkit send-fix builds pin) resolves Pubky on mainnet, so it serves Synonym's staging homeserver,
+  # and watches Blocktank's staging regtest Electrum, the chain of Bitkit's staging builds. A Cloudflare quick tunnel gives it a
+  # public https URL. The driver plays the marketplace (Locks and the issuer); Bitkit wallets are the seller and the buyer.
+  # Drive it with ./shop-mixed; see docs/shop-mixed.md. Nothing of the local chain or Pubky testnet runs for it.
+  # ---------------------------------------------------------------------------
+  shop-mixed-postgres:
+    profiles: [shop-mixed]
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      POSTGRES_DB: paykit
+      POSTGRES_USER: paykit
+      POSTGRES_PASSWORD: paykit
+    volumes:
+      - shop_mixed_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paykit -d paykit"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  shop-mixed-paykit:
+    profiles: [shop-mixed]
+    image: bitkit-docker/paykit-server:${SHOP_MIXED_PAYKIT_SERVER_TAG:-v0.1.0-rc11}
+    build:
+      context: ./marketplace/shop-mixed
+      dockerfile: paykit-server.Dockerfile
+      args:
+        PAYKIT_SERVER_TAG: ${SHOP_MIXED_PAYKIT_SERVER_TAG:-v0.1.0-rc11}
+        PAYKIT_SERVER_REV: ${SHOP_MIXED_PAYKIT_SERVER_REV:-662dca0619a9aa2962bcd677bd5ddd4563cd2784}
+        PAYKIT_RS_REV: ${SHOP_MIXED_PAYKIT_RS_REV:-ad3c72248d18587bb5b6ef3c99b063fa9bf31551}
+    restart: "no"
+    depends_on:
+      shop-mixed-postgres:
+        condition: service_healthy
+      shop-mixed-driver:
+        condition: service_completed_successfully
+    environment:
+      PAYKIT_CONFIG: /state/paykit/paykit-server.toml
+      PAYKIT_DATABASE_URL: postgres://paykit:paykit@shop-mixed-postgres:5432/paykit
+    volumes:
+      - shop_mixed_state:/state:ro
+    ports:
+      - "127.0.0.1:23110:3001"
+    # The config and master key are written by `shop-mixed-driver init`, which `up` runs first, as in the marketplace profile.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until [ -s /state/paykit/paykit-server.toml ] && [ -s /state/paykit/master-key ]; do
+          echo '[shop-mixed] waiting for shop-mixed-driver init'
+          sleep 1
+        done
+        PAYKIT_MASTER_KEY="$$(cat /state/paykit/master-key)"
+        export PAYKIT_MASTER_KEY
+        exec /usr/local/bin/paykit-server
+
+  # Cloudflare quick tunnel: https://<random words>.trycloudflare.com, a new name at every start, no account. Its metrics server
+  # answers /quicktunnel with the hostname (./shop-mixed url). Built from the pinned cloudflared image, so a project whose
+  # images are never pulled (the QA lanes) fetches it with `up --build`.
+  shop-mixed-tunnel:
+    profiles: [shop-mixed]
+    image: bitkit-docker/shop-mixed-tunnel:2026.9.3
+    build:
+      context: ./marketplace/shop-mixed
+      dockerfile: tunnel.Dockerfile
+    restart: "no"
+    depends_on:
+      - shop-mixed-paykit
+    command: ["tunnel", "--metrics", "0.0.0.0:23111", "--url", "http://shop-mixed-paykit:3001"]
+    ports:
+      - "127.0.0.1:23111:23111"
+
+  # The driver's default command is `init` (the Paykit config, issuer and master keys), so `up` initializes the stack and the
+  # driver exits 0; ./shop-mixed runs its other commands with `compose run`.
+  shop-mixed-driver:
+    profiles: [shop-mixed]
+    image: bitkit-docker/shop-mixed-driver:local
+    build:
+      context: ./marketplace/driver
+      dockerfile: Dockerfile.staging
+    environment:
+      MARKETPLACE_BACKEND: staging
+      PAYKIT_URL: http://shop-mixed-paykit:3001
+      MARKETPLACE_TUNNEL_METRICS: http://shop-mixed-tunnel:23111
+    volumes:
+      - shop_mixed_state:/state
+      - ./.marketplace/evidence:/evidence
+    entrypoint: ["node", "/app/driver.mjs"]
+    command: ["init"]
+
 volumes:
   trezor_emulator_state:
   trezor_emulator_logs:
@@ -629,5 +722,7 @@ volumes:
   homegate_data:
   marketplace_postgres_data:
   marketplace_state:
+  shop_mixed_postgres_data:
+  shop_mixed_state:
 
 networks: {}

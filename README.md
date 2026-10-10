@@ -163,6 +163,7 @@ Every host port is 1024 or above. The ports Bitkit, the Pubky SDK or Bitkit's UI
 | homeserver-proxy control, homeserver admin (`marketplace`) | 23298, 23288 (`MARKETPLACE_HOMESERVER_ADMIN_PORT`) | 6298, 6288 |
 | Paykit Server (`marketplace`) | 23101 (`MARKETPLACE_PAYKIT_PORT`) | 3001 |
 | `fixture-issuer`, `rc56-peer` (`payment-requests`) | 23012, 23013 | 3012, 3013 |
+| Paykit Server, quick tunnel metrics (`shop-mixed`) | 23110, 23111 | 3001, 23111 |
 
 ## API Examples
 
@@ -609,6 +610,33 @@ Both URLs are `pubkyauth://signin_grant?...` links whose one-time secret must st
 The fixture cannot check a Bitkit seller's payout address against the wallet's xpub, because Paykit Server keeps the xpub and the derived address to itself. It checks that the Payment Request address is a regtest native SegWit address, that exactly the amount is paid to it on chain, and Paykit Server's signed status (`detected`, then `confirmed` with a matching amount). That the address belongs to the wallet shows in the seller app: its balance rises by the amount and the received activity carries the same txid as `status`. `./pubky-marketplace verify-bitkit-seller` runs the whole path with a headless stand-in for the wallet and does check the payout against the stand-in's xpub.
 
 Remove the fixture with `./pubky-marketplace down`, or start over with `./pubky-marketplace reset`. The Pubky testnet keeps its accounts in memory, so the fixture cannot restart with its state and `down` deletes it (the regtest chain stays). `./pubky-marketplace --help` lists every command. See [docs/pubky-marketplace.md](docs/pubky-marketplace.md) for the pins, ports, roles and what the fixture does not cover.
+
+#### Shop on Staging with Our Own Paykit Server
+
+The `shop-mixed` profile runs the marketplace half of the Shop ourselves and everything else on Synonym's staging: Paykit Server
+v0.1.0-rc11 (`662dca06`, paykit-rs `ad3c7224` = v0.1.0-rc72, the version the Bitkit send-fix builds pin) on the staging homeserver
+`ufibwbmed6jeq9k4p583go95wofakh9fwpp4k734trq79pd9u1uy` (`homeserver.staging.pubky.app`), watching Blocktank's staging regtest
+Electrum (`ssl://electrs.bitkit.stag0.blocktank.to:9999`, the one Bitkit's staging builds use), behind a Cloudflare quick tunnel
+(`https://<words>.trycloudflare.com`, a new name at every start). Bitkit staging builds (Android `devDebug`, iOS `Debug`) are the
+seller and the buyer as they are; no local build, `adb reverse` or local chain is needed. Use it when the staging Shop cannot serve a
+test, for example when the app pins a Paykit version the staging Paykit Server does not run. Needs Docker, `curl` and `jq`, and
+outbound internet.
+
+```bash
+./shop-mixed up                          # builds on first use (a Rust build), starts, waits until /health/ready answers through the tunnel
+./shop-mixed health                      # pinned revisions, loopback and tunnel /health/ready
+./shop-mixed setup-url                   # seller wallet: open `android` / `ios_url`, or `setup_page` in its browser, approve, then:
+./shop-mixed setup-wait <flow>
+./shop-mixed seller-auth                 # the marketplace grant on /pub/app.locks/ through httprelay.staging.pubky.app
+./shop-mixed purchase --buyer <buyer pubky>   # the Payment Request appears in the buyer wallet
+./shop-mixed wait <bundle> detected      # after the buyer pays in the app
+./shop-mixed mine                        # one block on Blocktank's staging regtest chain
+./shop-mixed wait <bundle> confirmed
+./shop-mixed down                        # removes the stack and its state
+```
+
+The headless seller and buyer of the `marketplace` profile need the local testnet and chain, so `seed`, `fund`, `receive`, `pay`,
+`peers` and `verify` refuse here. See [docs/shop-mixed.md](docs/shop-mixed.md) for what runs where and how the pins are checked.
 
 #### Bech32 LNURL Pay
 

@@ -33,9 +33,20 @@ const EVIDENCE_DIR = '/evidence';
 const PAYKIT_URL = process.env.PAYKIT_URL ?? 'http://127.0.0.1:3001';
 const RPC_URL = process.env.BITCOIN_RPC_URL ?? 'http://bitcoind:43782';
 const RPC_AUTH = `${process.env.BITCOIN_RPC_USER ?? 'polaruser'}:${process.env.BITCOIN_RPC_PASS ?? 'polarpass'}`;
-// The static testnet homeserver key is fixed by Pubky Core.
-const HOMESERVER = 'pubky8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo';
-const SETUP_ORIGIN = 'http://localhost:8080';
+// MARKETPLACE_BACKEND=staging is the shop-mixed profile (docs/shop-mixed.md): our own Paykit Server on Synonym's staging homeserver and
+// relay, watching the regtest chain of Bitkit's staging builds (Blocktank staging Electrum). Bitkit wallets play the seller and the buyer
+// there; the headless roles need the local testnet and bitcoind, so their commands refuse.
+const STAGING = process.env.MARKETPLACE_BACKEND === 'staging';
+// The static testnet homeserver key is fixed by Pubky Core; staging is homeserver.staging.pubky.app.
+const HOMESERVER = STAGING
+  ? (process.env.MARKETPLACE_HOMESERVER ?? 'pubkyufibwbmed6jeq9k4p583go95wofakh9fwpp4k734trq79pd9u1uy')
+  : 'pubky8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo';
+const SETUP_ORIGIN = process.env.MARKETPLACE_SETUP_ORIGIN ?? 'http://localhost:8080';
+// Bitkit's staging builds (bitkit-android Env.kt, bitkit-ios Env.swift): Electrum and the Blocktank regtest API.
+const STAGING_ELECTRUM = process.env.MARKETPLACE_ELECTRUM ?? 'ssl://electrs.bitkit.stag0.blocktank.to:9999';
+const BLOCKTANK_REGTEST = 'https://api.stag0.blocktank.to/blocktank/api/v2/regtest';
+// The quick tunnel's metrics server answers /quicktunnel with its public hostname.
+const TUNNEL_METRICS = process.env.MARKETPLACE_TUNNEL_METRICS;
 // The grant client id Paykit Server requires in its config and puts in the setup auth URL as cid.
 const PAYKIT_CLIENT_ID = 'app.paykit.server';
 // Pubky 0.10 sessions are grants, so a signin names its client.
@@ -44,8 +55,8 @@ const HEADLESS_CLIENT_ID = 'marketplace.fixture';
 // client id as "Requester ID" and the path as the requested permission.
 const LOCKS_CLIENT_ID = 'locks.app';
 const LOCKS_CAPS = '/pub/app.locks/:rw';
-// The testnet's own HTTP relay; wallets reach it on localhost like the homeserver (Android: adb reverse 15412).
-const LOCKS_RELAY = 'http://localhost:15412/inbox/';
+// The testnet's own HTTP relay; wallets reach it on localhost like the homeserver (Android: adb reverse 15412). Staging has its own.
+const LOCKS_RELAY = STAGING ? 'https://httprelay.staging.pubky.app/inbox/' : 'http://localhost:15412/inbox/';
 const BITKIT_SESSION_SECRET = 'bitkit-seller.session';
 // Bitkit gives every setup request a fresh BIP84 account, starting at index 1.
 const STANDIN_ACCOUNT_INDEX = 1;
@@ -110,7 +121,8 @@ async function readSecret(name) {
 
 async function readFixture() {
   const fixture = await readJson(FIXTURE_FILE, null);
-  if (!fixture?.seller) fail('fixture is not seeded; run: ./pubky-marketplace seed');
+  if (STAGING && !fixture?.bitkit_seller) fail('no Bitkit seller yet; run: ./shop-mixed seller-auth');
+  if (!STAGING && !fixture?.seller) fail('fixture is not seeded; run: ./pubky-marketplace seed');
   return fixture;
 }
 
@@ -231,7 +243,7 @@ async function outboxState() {
 
 // ------------------------------------------------------------- Pubky identity
 
-const pubkyClient = () => Pubky.testnet('localhost');
+const pubkyClient = () => (STAGING ? new Pubky() : Pubky.testnet('localhost'));
 
 async function signUpIdentity(seed) {
   const keypair = Keypair.fromSecret(seed);
@@ -260,7 +272,7 @@ async function sellerSession(seller) {
 }
 
 // The seller record for `--seller`: the headless seller (default), the Bitkit seller, or its approved pubky.
-function pickSeller(fixture, which = 'headless') {
+function pickSeller(fixture, which = STAGING ? 'bitkit' : 'headless') {
   if (which === 'headless') return fixture.seller;
   const bitkit = fixture.bitkit_seller;
   if (!bitkit) fail('no Bitkit seller; run: ./pubky-marketplace seller-auth');
@@ -336,7 +348,7 @@ async function init() {
     await writeFile(`${PAYKIT_DIR}/master-key`, b64url(randomBytes(32)), { mode: 0o644 });
     log('created the Paykit Server master key');
   }
-  const config = `[http]
+  const config = STAGING ? stagingConfig(issuer) : `[http]
 listen_addr = "0.0.0.0:3001"
 
 [locks]
@@ -367,6 +379,47 @@ poll_interval = "500ms"
   out({ status: 'initialized', issuer });
 }
 
+// Paykit Server rc11 (paykit-rs rc72): the trusted issuer moved to [signed_services], Pubky resolution is mainnet (the staging
+// homeserver is published there), the chain is Blocktank's staging regtest, and the setup page is served through the quick tunnel
+// (one Cloudflare hop appends X-Forwarded-For) to any origin a tester opens it from.
+function stagingConfig(issuer) {
+  return `[http]
+listen_addr = "0.0.0.0:3001"
+trusted_proxy_hops = 1
+
+[signed_services]
+trusted_public_keys = ["${issuer}"]
+
+[setup]
+allowed_origins = ["*"]
+
+[paykit]
+client_id = "${PAYKIT_CLIENT_ID}"
+app_id = "paykit-server"
+network = "mainnet"
+
+[bitcoin]
+network = "regtest"
+
+[electrum]
+endpoint = "${STAGING_ELECTRUM}"
+poll_interval = "2s"
+
+[outbox]
+poll_interval = "500ms"
+`;
+}
+
+async function tunnelUrl() {
+  if (!TUNNEL_METRICS) return null;
+  try {
+    const { hostname } = await (await fetch(`${TUNNEL_METRICS}/quicktunnel`)).json();
+    return hostname ? `https://${hostname}` : null;
+  } catch {
+    return null;
+  }
+}
+
 async function completeSetup(flowId, seconds = 120) {
   const deadline = Date.now() + seconds * 1000;
   for (;;) {
@@ -389,8 +442,9 @@ async function beginSetup() {
   );
   if (response.status !== 200) fail(`GET /setup returned HTTP ${response.status}`);
   const html = await response.text();
-  const flow = html.match(/const flowId=("(?:[^"\\]|\\.)*");/);
-  const auth = html.match(/<a class="bitkit-btn" href="([^"]+)">/);
+  // rc65 writes `const flowId="...";` and `<a class="bitkit-btn" href="...">`; rc11 may add attributes after href.
+  const flow = html.match(/flowId=("(?:[^"\\]|\\.)*")/);
+  const auth = html.match(/<a class="bitkit-btn" href="([^"]+)"/);
   if (!flow || !auth) fail('setup page has no flow id or auth URL');
   const authUrl = auth[1]
     .replaceAll('&amp;', '&')
@@ -442,7 +496,8 @@ async function setupUrl(args = []) {
     ios_url: `bitkit://pubky-auth/setup?${authUrl.slice(authUrl.indexOf('?') + 1)}`,
     client_id: params.get('cid'),
     claim: params.get('x-bitkit-claim'),
-    next: `./pubky-marketplace setup-wait ${flowId}`,
+    ...(STAGING ? { setup_page: await tunnelUrl().then((url) => url && `${url}/setup`) } : {}),
+    next: `./${STAGING ? 'shop-mixed' : 'pubky-marketplace'} setup-wait ${flowId}`,
   });
 }
 
@@ -541,7 +596,30 @@ function flag(args, name) {
   return at >= 0 ? args[at + 1] : undefined;
 }
 
+async function stagingInfo() {
+  const fixture = await readJson(FIXTURE_FILE, {});
+  const purchases = await readJson(PURCHASES_FILE, []);
+  return {
+    backend: 'staging',
+    homeserver: HOMESERVER,
+    http_relay: LOCKS_RELAY,
+    electrum: STAGING_ELECTRUM,
+    paykit_server: { url: await tunnelUrl(), receiver_path: SERVER_PATH, network: 'regtest', ready: (await paykitReady()).ok },
+    issuer: existsSync(`${SECRETS}/issuer.seed`) ? await issuerPubky() : null,
+    bitkit_seller: fixture.bitkit_seller
+      ? {
+          pubky: fixture.bitkit_seller.pubky,
+          marketplace_grant: `${fixture.bitkit_seller.client_id} ${fixture.bitkit_seller.capabilities}`,
+          setup_completed_at: fixture.bitkit_seller.setup_completed_at ?? null,
+        }
+      : null,
+    purchases: purchases.length,
+    latest_purchase: purchases.at(-1) ?? null,
+  };
+}
+
 async function publicInfo() {
+  if (STAGING) return stagingInfo();
   const fixture = await readJson(FIXTURE_FILE, {});
   const chain = await chainInfo().catch(() => null);
   const purchases = await readJson(PURCHASES_FILE, []);
@@ -706,7 +784,7 @@ async function recordPaymentTx(purchases, purchase, options) {
 async function purchase(args) {
   const sats = Number(flag(args, '--sats') ?? DEFAULT_SATS);
   if (!Number.isInteger(sats) || sats <= 0) fail('--sats must be a positive integer');
-  const buyerArg = flag(args, '--buyer') ?? 'headless';
+  const buyerArg = flag(args, '--buyer') ?? (STAGING ? fail('usage: purchase --buyer <the Bitkit buyer pubky> [--sats N]') : 'headless');
   const fixture = await readFixture();
   const seller = pickSeller(fixture, flag(args, '--seller') ?? 'headless');
   await waitForPaykit();
@@ -846,7 +924,7 @@ async function statusCommand(args) {
   const { purchases, purchase } = await findPurchase(args[0]);
   const paykit = await paykitStatus(purchase);
   // A Bitkit buyer pays from the app, so learn the txid from the chain (non-fatal: nothing to find before payment).
-  if (!purchase.txid) await recordPaymentTx(purchases, purchase).catch((error) => log(`no payment txid yet: ${error.message}`));
+  if (!purchase.txid && !STAGING) await recordPaymentTx(purchases, purchase).catch((error) => log(`no payment txid yet: ${error.message}`));
   const before = purchase.state;
   if (paykit.status === 'confirmed' && paykit.amount_matched && paykit.confirmations >= 1) purchase.state = 'completed';
   else if (paykit.status === 'detected' && paykit.amount_matched) purchase.state = 'payment_detected';
@@ -869,7 +947,21 @@ async function statusCommand(args) {
   });
 }
 
+// Staging's chain is Blocktank's: mine through its regtest API, as the Bitkit E2E suite does.
+async function stagingMine(args) {
+  const count = Number(flag(args, '--count') ?? 1);
+  if (!Number.isInteger(count) || count < 1 || count > 10) fail('--count must be 1 to 10');
+  const response = await fetch(`${BLOCKTANK_REGTEST}/chain/mine`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ count }),
+  });
+  if (!response.ok) fail(`Blocktank regtest mine returned HTTP ${response.status}`);
+  out({ mined: count, via: BLOCKTANK_REGTEST });
+}
+
 async function mine(args) {
+  if (STAGING) return stagingMine(args);
   const bundle = flag(args, '--bundle');
   const before = await chainInfo();
   const mempoolBefore = await rpc('getrawmempool');
@@ -1146,7 +1238,8 @@ async function adoptBitkitSeller(session, kind) {
   const restored = await pubkyClient().restoreSession(secret);
   if (restored.info.publicKey.toString() !== pubky) fail('the exported grant session restores to another identity');
   await writeSecret(`${SECRETS}/${BITKIT_SESSION_SECRET}`, secret);
-  const fixture = await readFixture();
+  // On staging the Bitkit seller is the first seller the fixture has.
+  const fixture = STAGING ? await readJson(FIXTURE_FILE, {}) : await readFixture();
   const previous = fixture.bitkit_seller?.pubky === pubky ? fixture.bitkit_seller : {};
   const paykitSetup = await setupStatus(pubky);
   fixture.bitkit_seller = {
@@ -1168,7 +1261,7 @@ async function sellerAuth(args) {
   const relay = flag(args, '--relay') ?? LOCKS_RELAY;
   const seconds = Number(flag(args, '--timeout') ?? 300);
   if (!Number.isFinite(seconds) || seconds <= 0) fail('usage: seller-auth [--relay <url>] [--timeout <seconds>] [--serial <adb-serial>]');
-  await readFixture();
+  if (!STAGING) await readFixture();
   const { flow, authUrl } = await startLocksGrant(relay);
   // One compact JSON object per line: the first line is the request, the last one the approval.
   outLine({
@@ -1294,9 +1387,16 @@ const commands = {
   'verify-bitkit-seller': () => verifyBitkitSeller(),
 };
 
+// The headless wallet roles and the local chain do not exist on staging.
+const LOCAL_ONLY = ['seed', 'fund', 'receive', 'pay', 'peers', 'verify', 'verify-bitkit-seller'];
+
 const [command, ...args] = process.argv.slice(2);
 if (!commands[command]) {
   process.stderr.write(`unknown driver command: ${command ?? '(none)'}\n`);
+  process.exit(2);
+}
+if (STAGING && LOCAL_ONLY.includes(command)) {
+  process.stderr.write(`FAIL: ${command} needs the local testnet and chain; on staging Bitkit wallets are the seller and the buyer\n`);
   process.exit(2);
 }
 try {
