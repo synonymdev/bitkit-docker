@@ -1373,7 +1373,8 @@ async function verifyBitkitSeller() {
 async function initAndStay() {
   await init();
   process.on('SIGTERM', () => process.exit(0));
-  await new Promise(() => {});
+  // A pending promise alone does not keep Node running (it exits 13 on an unsettled top-level await); a timer does.
+  await new Promise(() => setInterval(() => {}, 2 ** 30));
 }
 
 const commands = {
