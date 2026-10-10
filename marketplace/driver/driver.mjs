@@ -1368,8 +1368,17 @@ async function verifyBitkitSeller() {
   await writeEvidence(evidence, '-bitkit-seller');
 }
 
+// `init`, then stay up: the shop-mixed profile's long-running driver service, so a project started with `up --wait` holds no
+// exited one-shot container. The other commands run in their own `compose run` containers.
+async function initAndStay() {
+  await init();
+  process.on('SIGTERM', () => process.exit(0));
+  await new Promise(() => {});
+}
+
 const commands = {
   init: () => init(),
+  'init-and-stay': initAndStay,
   seed,
   info: async () => out(await publicInfo()),
   'setup-url': (args) => setupUrl(args),

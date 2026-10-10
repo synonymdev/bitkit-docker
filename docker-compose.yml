@@ -656,7 +656,7 @@ services:
       shop-mixed-postgres:
         condition: service_healthy
       shop-mixed-driver:
-        condition: service_completed_successfully
+        condition: service_started
     environment:
       PAYKIT_CONFIG: /state/paykit/paykit-server.toml
       PAYKIT_DATABASE_URL: postgres://paykit:paykit@shop-mixed-postgres:5432/paykit
@@ -693,8 +693,8 @@ services:
     ports:
       - "127.0.0.1:23111:23111"
 
-  # The driver's default command is `init` (the Paykit config, issuer and master keys), so `up` initializes the stack and the
-  # driver exits 0; ./shop-mixed runs its other commands with `compose run`.
+  # The driver's service writes the Paykit config, issuer and master keys (`init`) and stays up, so `up --wait` sees no exited
+  # one-shot container; ./shop-mixed runs the driver's other commands with `compose run`.
   shop-mixed-driver:
     profiles: [shop-mixed]
     image: bitkit-docker/shop-mixed-driver:local
@@ -709,7 +709,7 @@ services:
       - shop_mixed_state:/state
       - ./.marketplace/evidence:/evidence
     entrypoint: ["node", "/app/driver.mjs"]
-    command: ["init"]
+    command: ["init-and-stay"]
 
 volumes:
   trezor_emulator_state:

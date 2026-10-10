@@ -29,7 +29,7 @@ it was built from; `./shop-mixed health` prints them. Move the three `SHOP_MIXED
 
 ## Config
 
-`shop-mixed-driver init` (the driver service's default command, which `up` runs before Paykit Server starts) writes the issuer key,
+`shop-mixed-driver init` (run by the driver service, which then stays up; Paykit Server waits for its files) writes the issuer key,
 the master key and the Paykit Server config into the `shop_mixed_state` volume. The config trusts the driver's issuer key under
 `[signed_services]`, accepts the setup page from any origin (`allowed_origins = ["*"]`, the page is opened through the tunnel), and
 counts one proxy hop (`trusted_proxy_hops = 1`, Cloudflare's `X-Forwarded-For`).
