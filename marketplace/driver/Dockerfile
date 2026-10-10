@@ -11,4 +11,4 @@ COPY --from=paykit /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certific
 # Paykit Server rc65 accepts a setup claim only after the identity published its Paykit noise key authorization; the payment request
 # fixture binary publishes it for the headless seller under this name (a Bitkit wallet does it in its own Paykit setup).
 COPY --from=fixture /usr/local/bin/fixture /usr/local/bin/paykit-key-authorization
-COPY driver.mjs ./
+COPY driver.mjs trust.mjs ./

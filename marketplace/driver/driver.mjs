@@ -22,6 +22,7 @@ import { existsSync } from 'node:fs';
 import { blake3 } from '@noble/hashes/blake3';
 import { HDKey } from '@scure/bip32';
 import { AuthFlowKind, Keypair, Pubky, PublicKey } from '@synonymdev/pubky';
+import { mergeTrust, missingTrust, requiredKeys, trustedKeys, withTrust } from './trust.mjs';
 
 const STATE = '/state';
 const SECRETS = `${STATE}/secrets`;
@@ -373,10 +374,21 @@ poll_interval = "1s"
 poll_interval = "500ms"
 `;
   const path = `${PAYKIT_DIR}/paykit-server.toml`;
-  if (!existsSync(path) || (await readFile(path, 'utf8')) !== config) {
-    await writeFile(path, config, { mode: 0o644 });
+  const existing = existsSync(path) ? await readFile(path, 'utf8') : null;
+  let written = config;
+  if (STAGING) {
+    // trust is merged, never replaced: keys a Locks connect or the service added stay across restarts (trust.mjs)
+    const required = requiredKeys(issuer, process.env.PAYKIT_TRUSTED_KEYS);
+    written = withTrust(config, mergeTrust(trustedKeys(existing), required));
   }
-  out({ status: 'initialized', issuer });
+  if (existing !== written) {
+    await writeFile(path, written, { mode: 0o644 });
+  }
+  if (STAGING) {
+    const missing = missingTrust(await readFile(path, 'utf8'), requiredKeys(issuer, process.env.PAYKIT_TRUSTED_KEYS));
+    if (missing.length) throw new Error(`Paykit trust lost required keys: ${missing.join(', ')}`);
+  }
+  out({ status: 'initialized', issuer, trusted: STAGING ? trustedKeys(await readFile(path, 'utf8')) : [issuer] });
 }
 
 // Paykit Server rc11 (paykit-rs rc72): the trusted issuer moved to [signed_services], Pubky resolution is mainnet (the staging
