@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Run the Shop's marketplace on Synonym's staging with our own Paykit Server v0.1.0-rc11 behind a Cloudflare quick tunnel (`./shop-mixed`, profile `shop-mixed`)
+- Run a paid Shop order on our own Paykit Server, Lock Server, marketplace service and Shop with Synonym's staging homeserver (`./shop-order`, profile `shop-order`)
 - Rebuild the Paykit fixtures on the paykit-rs version a Bitkit pull request pins with `scripts/follow-app-paykit`
 - Withhold and restore the payment request issuer's endpoints with `POST /endpoints`, so a journey can make the app's request resolution fail and recover
 - Route the apps' homeserver traffic through `homeserver-proxy`, whose control port (23298) delays or fails one identity's homeserver requests by path

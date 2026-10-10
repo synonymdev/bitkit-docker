@@ -164,6 +164,7 @@ Every host port is 1024 or above. The ports Bitkit, the Pubky SDK or Bitkit's UI
 | Paykit Server (`marketplace`) | 23101 (`MARKETPLACE_PAYKIT_PORT`) | 3001 |
 | `fixture-issuer`, `rc56-peer` (`payment-requests`) | 23012, 23013 | 3012, 3013 |
 | Paykit Server, quick tunnel metrics (`shop-mixed`) | 23110, 23111 | 3001, 23111 |
+| Lock Server, marketplace service, Shop, and their tunnel metrics (`shop-order`) | 23120, 23130, 23140; 23121, 23131, 23141 | 3000, 8080, 3000 |
 
 ## API Examples
 
@@ -637,6 +638,23 @@ outbound internet.
 
 The headless seller and buyer of the `marketplace` profile need the local testnet and chain, so `seed`, `fund`, `receive`, `pay`,
 `peers` and `verify` refuse here. See [docs/shop-mixed.md](docs/shop-mixed.md) for what runs where and how the pins are checked.
+
+#### Shop Order on Our Own Servers
+
+The `shop-order` profile adds the rest of the Shop to `shop-mixed`, so a Bitkit buyer can pay a Pubky Ring seller's digital listing
+and the same marketplace order becomes paid: the Lock Server v0.1.0-rc10, the marketplace service (pubky-marketplace-service#98,
+`005b0707`) and the Shop (pubky-marketplace#154, `fbe3babb`), the commits the Android and iOS order-paid acceptance ran on, with
+Postgres, a quick tunnel per public URL, and keys made once and kept. Synonym's staging Shop stays the first route; use this when it
+cannot serve the build under test. Needs Docker, `curl`, `jq`, `git` and `python3`, and about 6 GB free for the Shop's build.
+
+```bash
+SHOP_ORDER_PROVISIONING=1 ./shop-order fetch   # pinned sources, plus the seller's provisioning page
+./shop-order up                                # starts everything; prints the URLs, readiness and Paykit's trusted keys
+./shop-order lock --session-file seller-locks-session.json --content product.txt --sats 1000   # the listing's digitalLock
+./shop-order down --keep-data                  # stop; keeps databases, keys and the seller's setup
+```
+
+See [docs/shop-order.md](docs/shop-order.md) for the seller and buyer steps, the pass criteria and every setting.
 
 #### Bech32 LNURL Pay
 
