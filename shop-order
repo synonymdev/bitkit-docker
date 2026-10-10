@@ -15,7 +15,9 @@ SHOP_REPO=https://github.com/pubky/pubky-marketplace.git
 SHOP_REV=${SHOP_ORDER_SHOP_REV:-fbe3babba0c3c05990571221b5d4dc0c31788e68} # pubky-marketplace#154
 export SHOP_ORDER_LOCKS_REV=$LOCKS_REV SHOP_ORDER_SERVICE_REV=$SERVICE_REV SHOP_ORDER_SHOP_REV=$SHOP_REV
 
-COMPOSE=(docker compose --profile shop-order)
+# Its own compose project, never a QA lane's (a lane's cleanup removes that lane's project), whatever COMPOSE_PROJECT_NAME says.
+PROJECT=${SHOP_ORDER_PROJECT:-shop-order}
+COMPOSE=(docker compose --project-name "$PROJECT" --profile shop-order)
 BASE=(shop-mixed-postgres shop-mixed-driver shop-mixed-paykit shop-mixed-tunnel)
 TUNNELS=(shop-order-locks-tunnel shop-order-service-tunnel shop-order-shop-tunnel)
 APPS=(shop-order-postgres shop-order-locks shop-order-service shop-order-shop)
@@ -49,12 +51,15 @@ fetch_one() { # name repo rev
     rm -rf "$dir" && mkdir -p "$dir"
     git -C "$dir" init -q && git -C "$dir" remote add origin "$2"
   fi
-  if [ "$(git -C "$dir" rev-parse HEAD 2>/dev/null)" != "$3" ]; then
+  if ! git -C "$dir" cat-file -e "$3^{commit}" 2>/dev/null; then
     git -C "$dir" fetch -q --depth 1 origin "$3"
-    git -C "$dir" checkout -q --force FETCH_HEAD
   fi
-  [ "$(git -C "$dir" rev-parse HEAD)" = "$3" ] || { echo "$1 is not at $3" >&2; exit 1; }
+  # an owned checkout: tracked edits and untracked files go, so the source is exactly the commit, not only its HEAD
+  git -C "$dir" checkout -q --force --detach "$3"
+  git -C "$dir" reset -q --hard "$3"
   git -C "$dir" clean -qfdx -e node_modules
+  [ "$(git -C "$dir" rev-parse HEAD)" = "$3" ] && [ -z "$(git -C "$dir" status --porcelain)" ] \
+    || { echo "$1 is not exactly $3" >&2; exit 1; }
   progress "$1 at $3"
 }
 
@@ -111,6 +116,7 @@ up() {
   compose up -d --build "${APPS[@]}"
   wait_http "http://$(published shop-mixed-paykit 3001)/health/ready" "Paykit Server"
   wait_http "http://$(published shop-order-locks 3000)/readyz" "the Lock Server"
+  wait_http "http://$(published shop-order-service 8080)/ready" "the marketplace service"
   wait_http "http://$(published shop-order-shop 3000)/" "the Shop" 600
   health
 }
@@ -119,6 +125,11 @@ urls() { cat .shop-order/run/urls.env; }
 
 health() {
   local image
+  check() { curl -fsS -o /dev/null "$1" || { echo "not ready: $2 ($1)" >&2; exit 1; }; }
+  check "http://$(published shop-mixed-paykit 3001)/health/ready" "Paykit Server"
+  check "http://$(published shop-order-locks 3000)/readyz" "the Lock Server"
+  check "http://$(published shop-order-service 8080)/ready" "the marketplace service"
+  check "http://$(published shop-order-shop 3000)/" "the Shop"
   for service in shop-mixed-paykit shop-order-locks shop-order-service shop-order-shop; do
     image=$(compose config --format json | jq -r ".services[\"$service\"].image")
     echo "$service: $image"
@@ -126,7 +137,7 @@ health() {
   echo "revisions: locks $(git -C .shop-order/src/locks rev-parse HEAD), service $(git -C .shop-order/src/service rev-parse HEAD), shop $(git -C .shop-order/src/shop rev-parse HEAD)"
   echo "paykit /health/ready: $(curl -fsS "http://$(published shop-mixed-paykit 3001)/health/ready")"
   echo "locks /readyz: $(curl -fsS -o /dev/null -w '%{http_code}' "http://$(published shop-order-locks 3000)/readyz")"
-  echo "service: $(curl -sS -o /dev/null -w '%{http_code}' "http://$(published shop-order-service 8080)/health" || true)"
+  echo "service /ready: $(curl -fsS -o /dev/null -w '%{http_code}' "http://$(published shop-order-service 8080)/ready")"
   echo "shop /: $(curl -fsS -o /dev/null -w '%{http_code}' "http://$(published shop-order-shop 3000)/")"
   echo "paykit trusted keys: $(compose exec -T shop-mixed-driver sh -c "grep trusted_public_keys /state/paykit/paykit-server.toml")"
   echo "lock server key: pubky$(compose exec -T shop-mixed-driver sh -c ". /state/order/locks.env && echo \$LOCKS_PUBLIC_KEY")"
