@@ -9,3 +9,4 @@ target/
 .trezor-user-env/
 __pycache__/
 .marketplace/
+.shop-order/

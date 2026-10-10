@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# A Shop order paid end to end on our own Paykit Server and Lock Server with Synonym's staging homeserver (profile "shop-order",
+# on top of shop-mixed). Docs: docs/shop-order.md and the README section "Shop order on our own servers".
+set -euo pipefail
+
+CLI_NAME="$(basename "$0")"
+cd "$(dirname "$0")"
+
+# The commits the Android and iOS order-paid acceptance ran on (10 Oct). Another revision is refused unless set here on purpose.
+LOCKS_REPO=https://github.com/pubky/locks.git
+LOCKS_REV=${SHOP_ORDER_LOCKS_REV:-01cfeca14c7b5d385d8c3536c0cb4e1af81b458c} # v0.1.0-rc10
+SERVICE_REPO=https://github.com/pubky/pubky-marketplace-service.git
+SERVICE_REV=${SHOP_ORDER_SERVICE_REV:-005b0707e6047b388ce032f4b51a2e0ed9e3a752} # pubky-marketplace-service#98
+SHOP_REPO=https://github.com/pubky/pubky-marketplace.git
+SHOP_REV=${SHOP_ORDER_SHOP_REV:-fbe3babba0c3c05990571221b5d4dc0c31788e68} # pubky-marketplace#154
+export SHOP_ORDER_LOCKS_REV=$LOCKS_REV SHOP_ORDER_SERVICE_REV=$SERVICE_REV SHOP_ORDER_SHOP_REV=$SHOP_REV
+
+COMPOSE=(docker compose --profile shop-order)
+BASE=(shop-mixed-postgres shop-mixed-driver shop-mixed-paykit shop-mixed-tunnel)
+TUNNELS=(shop-order-locks-tunnel shop-order-service-tunnel shop-order-shop-tunnel)
+APPS=(shop-order-postgres shop-order-locks shop-order-service shop-order-shop)
+
+compose() { "${COMPOSE[@]}" "$@"; }
+progress() { echo "[${CLI_NAME}] $*" >&2; }
+published() { compose port "$1" "$2" 2>/dev/null | sed -n 's/.*:\([0-9]*\)$/127.0.0.1:\1/p' | head -1; }
+
+show_help() {
+  cat <<HELP
+Usage: ${CLI_NAME} <command> [args]
+
+  fetch                 Fetch the Lock Server, marketplace service and Shop at their pinned commits into .shop-order/src
+                        (SHOP_ORDER_PROVISIONING=1 also adds the seller's provisioning page to the Shop; see docs)
+  build                 Build every image of the profile
+  up                    Keys, Paykit Server rc11, the tunnels, then Postgres, the Lock Server, the service and the Shop;
+                        prints the URLs and the health
+  urls                  The public URLs: Shop, marketplace service, Lock Server, Paykit Server
+  health                Each service's readiness, its pinned revision, and Paykit's trusted keys read back
+  lock --session-file F --content FILE --sats N   Create a digital listing's Lock as the seller; prints its digitalLock
+  logs [service]        Follow a service's logs (default shop-order-shop)
+  down [--keep-data]    Remove the stack; --keep-data keeps the databases, keys and the seller's Paykit setup
+
+Marketplace driver commands (setup-url, status, mine, info, ...) are ./shop-mixed's.
+HELP
+}
+
+fetch_one() { # name repo rev
+  local dir=.shop-order/src/$1
+  if [ ! -d "$dir/.git" ]; then
+    rm -rf "$dir" && mkdir -p "$dir"
+    git -C "$dir" init -q && git -C "$dir" remote add origin "$2"
+  fi
+  if [ "$(git -C "$dir" rev-parse HEAD 2>/dev/null)" != "$3" ]; then
+    git -C "$dir" fetch -q --depth 1 origin "$3"
+    git -C "$dir" checkout -q --force FETCH_HEAD
+  fi
+  [ "$(git -C "$dir" rev-parse HEAD)" = "$3" ] || { echo "$1 is not at $3" >&2; exit 1; }
+  git -C "$dir" clean -qfdx -e node_modules
+  progress "$1 at $3"
+}
+
+fetch() {
+  fetch_one locks "$LOCKS_REPO" "$LOCKS_REV"
+  fetch_one service "$SERVICE_REPO" "$SERVICE_REV"
+  fetch_one shop "$SHOP_REPO" "$SHOP_REV"
+  if [ "${SHOP_ORDER_PROVISIONING:-0}" = 1 ]; then
+    mkdir -p .shop-order/src/shop/src/app/marketplace/shop-order-provision
+    cp marketplace/shop-order/provision-page.tsx .shop-order/src/shop/src/app/marketplace/shop-order-provision/page.tsx
+    progress "added the seller's provisioning page at /marketplace/shop-order-provision (disclosed; not part of the Shop)"
+  fi
+}
+
+tunnel_url() { # tunnel service, metrics port
+  local host
+  host=$(curl -fsS "http://$(published "$1" "$2")/quicktunnel" 2>/dev/null | sed -n 's/.*"hostname":"\([^"]*\)".*/\1/p')
+  [ -n "$host" ] && echo "https://$host"
+}
+
+wait_url() { # tunnel service, metrics port
+  local deadline=$(($(date +%s) + 120)) url
+  until url=$(tunnel_url "$1" "$2"); do
+    [ "$(date +%s)" -lt "$deadline" ] || { echo "$1 has no hostname; see: ${CLI_NAME} logs $1" >&2; exit 1; }
+    sleep 2
+  done
+  echo "$url"
+}
+
+wait_http() { # url, what
+  local deadline=$(($(date +%s) + ${3:-300}))
+  until curl -fsS -o /dev/null "$1" 2>/dev/null; do
+    [ "$(date +%s)" -lt "$deadline" ] || { echo "$2 did not answer at $1; see: ${CLI_NAME} logs" >&2; exit 1; }
+    sleep 3
+  done
+}
+
+up() {
+  [ -d .shop-order/src/shop/.git ] || fetch
+  mkdir -p .shop-order/run .shop-order/evidence .marketplace/evidence
+  rm -f .shop-order/run/urls.env
+  progress "keys (made once, then kept), Paykit Server rc11 and the tunnels"
+  compose run --rm --no-deps --quiet-build shop-order-keys
+  compose up -d --build "${BASE[@]}" "${TUNNELS[@]}"
+  local paykit locks service shop
+  paykit=$(wait_url shop-mixed-tunnel 23111)
+  locks=$(wait_url shop-order-locks-tunnel 23121)
+  service=$(wait_url shop-order-service-tunnel 23131)
+  shop=$(wait_url shop-order-shop-tunnel 23141)
+  printf 'PAYKIT_URL=%s\nLOCKS_URL=%s\nSERVICE_URL=%s\nSHOP_URL=%s\n' "$paykit" "$locks" "$service" "$shop" > .shop-order/run/urls.env
+  progress "Postgres, the Lock Server, the marketplace service, the Shop BFF tables and the Shop"
+  compose up -d --build shop-order-postgres
+  compose run --rm --quiet-build shop-order-bff-migrate
+  compose up -d --build "${APPS[@]}"
+  wait_http "http://$(published shop-mixed-paykit 3001)/health/ready" "Paykit Server"
+  wait_http "http://$(published shop-order-locks 3000)/readyz" "the Lock Server"
+  wait_http "http://$(published shop-order-shop 3000)/" "the Shop" 600
+  health
+}
+
+urls() { cat .shop-order/run/urls.env; }
+
+health() {
+  local image
+  for service in shop-mixed-paykit shop-order-locks shop-order-service shop-order-shop; do
+    image=$(compose config --format json | jq -r ".services[\"$service\"].image")
+    echo "$service: $image"
+  done
+  echo "revisions: locks $(git -C .shop-order/src/locks rev-parse HEAD), service $(git -C .shop-order/src/service rev-parse HEAD), shop $(git -C .shop-order/src/shop rev-parse HEAD)"
+  echo "paykit /health/ready: $(curl -fsS "http://$(published shop-mixed-paykit 3001)/health/ready")"
+  echo "locks /readyz: $(curl -fsS -o /dev/null -w '%{http_code}' "http://$(published shop-order-locks 3000)/readyz")"
+  echo "service: $(curl -sS -o /dev/null -w '%{http_code}' "http://$(published shop-order-service 8080)/health" || true)"
+  echo "shop /: $(curl -fsS -o /dev/null -w '%{http_code}' "http://$(published shop-order-shop 3000)/")"
+  echo "paykit trusted keys: $(compose exec -T shop-mixed-driver sh -c "grep trusted_public_keys /state/paykit/paykit-server.toml")"
+  echo "lock server key: pubky$(compose exec -T shop-mixed-driver sh -c ". /state/order/locks.env && echo \$LOCKS_PUBLIC_KEY")"
+  urls
+}
+
+lock() {
+  local key
+  key=$(compose exec -T shop-mixed-driver sh -c ". /state/order/locks.env && echo \$LOCKS_PUBLIC_KEY")
+  python3 marketplace/shop-order/lock.py --locks-url "$(sed -n 's/^LOCKS_URL=//p' .shop-order/run/urls.env)" \
+    --lock-server "pubky$key" --out .shop-order/evidence "$@"
+}
+
+down() {
+  compose rm -sfv "${APPS[@]}" "${TUNNELS[@]}" "${BASE[@]}" >/dev/null
+  rm -f .shop-order/run/urls.env
+  if [ "${1:-}" != --keep-data ]; then
+    local project
+    project=$(compose config --format json | jq -r '.name')
+    docker volume rm "${project}_shop_order_postgres_data" "${project}_shop_mixed_state" "${project}_shop_mixed_postgres_data" >/dev/null 2>&1 || true
+  fi
+}
+
+case "${1:-help}" in
+  fetch) fetch ;;
+  build) [ -d .shop-order/src/shop/.git ] || fetch; compose build ;;
+  up) up ;;
+  urls) urls ;;
+  health) health ;;
+  lock) shift; lock "$@" ;;
+  logs) shift; compose logs -f --tail 100 "${@:-shop-order-shop}" ;;
+  down) shift; down "${1:-}" ;;
+  help | -h | --help) show_help ;;
+  *) show_help >&2; exit 2 ;;
+esac

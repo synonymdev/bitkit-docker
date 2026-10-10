@@ -378,17 +378,24 @@ poll_interval = "500ms"
   let written = config;
   if (STAGING) {
     // trust is merged, never replaced: keys a Locks connect or the service added stay across restarts (trust.mjs)
-    const required = requiredKeys(issuer, process.env.PAYKIT_TRUSTED_KEYS);
+    const required = requiredKeys(issuer, await extraTrust());
     written = withTrust(config, mergeTrust(trustedKeys(existing), required));
   }
   if (existing !== written) {
     await writeFile(path, written, { mode: 0o644 });
   }
   if (STAGING) {
-    const missing = missingTrust(await readFile(path, 'utf8'), requiredKeys(issuer, process.env.PAYKIT_TRUSTED_KEYS));
+    const missing = missingTrust(await readFile(path, 'utf8'), requiredKeys(issuer, await extraTrust()));
     if (missing.length) throw new Error(`Paykit trust lost required keys: ${missing.join(', ')}`);
   }
   out({ status: 'initialized', issuer, trusted: STAGING ? trustedKeys(await readFile(path, 'utf8')) : [issuer] });
+}
+
+// Keys Paykit Server must trust besides the issuer: PAYKIT_TRUSTED_KEYS, and the shop-order profile's Lock Server signer and
+// service key, which its keys step writes to /state/paykit/trusted-keys.
+async function extraTrust() {
+  const file = `${PAYKIT_DIR}/trusted-keys`;
+  return `${process.env.PAYKIT_TRUSTED_KEYS ?? ''} ${existsSync(file) ? await readFile(file, 'utf8') : ''}`;
 }
 
 // Paykit Server rc11 (paykit-rs rc72): the trusted issuer moved to [signed_services], Pubky resolution is mainnet (the staging

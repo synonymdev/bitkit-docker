@@ -626,7 +626,7 @@ services:
   # Drive it with ./shop-mixed; see docs/shop-mixed.md. Nothing of the local chain or Pubky testnet runs for it.
   # ---------------------------------------------------------------------------
   shop-mixed-postgres:
-    profiles: [shop-mixed]
+    profiles: [shop-mixed, shop-order]
     image: postgres:16-alpine
     restart: "no"
     environment:
@@ -642,7 +642,7 @@ services:
       retries: 30
 
   shop-mixed-paykit:
-    profiles: [shop-mixed]
+    profiles: [shop-mixed, shop-order]
     image: bitkit-docker/paykit-server:${SHOP_MIXED_PAYKIT_SERVER_TAG:-v0.1.0-rc11}
     build:
       context: ./marketplace/shop-mixed
@@ -681,7 +681,7 @@ services:
   # answers /quicktunnel with the hostname (./shop-mixed url). Built from the pinned cloudflared image, so a project whose
   # images are never pulled (the QA lanes) fetches it with `up --build`.
   shop-mixed-tunnel:
-    profiles: [shop-mixed]
+    profiles: [shop-mixed, shop-order]
     image: bitkit-docker/shop-mixed-tunnel:2026.9.3
     build:
       context: ./marketplace/shop-mixed
@@ -696,7 +696,7 @@ services:
   # The driver's service writes the Paykit config, issuer and master keys (`init`) and stays up, so `up --wait` sees no exited
   # one-shot container; ./shop-mixed runs the driver's other commands with `compose run`.
   shop-mixed-driver:
-    profiles: [shop-mixed]
+    profiles: [shop-mixed, shop-order]
     image: bitkit-docker/shop-mixed-driver:local
     build:
       context: ./marketplace/driver
@@ -711,6 +711,159 @@ services:
     entrypoint: ["node", "/app/driver.mjs"]
     command: ["init-and-stay"]
 
+  # ---------------------------------------------------------------------------
+  # A Shop order paid end to end on our own servers with Synonym's staging homeserver (profile "shop-order", on top of
+  # shop-mixed's Paykit Server rc11): the Lock Server v0.1.0-rc10, the marketplace service and the Shop at the commits that ran
+  # the Android and iOS order-paid acceptance (10 Oct), Postgres for the three, and a quick tunnel for each URL a phone or the
+  # seller's browser opens. ./shop-order fetches each source at its exact commit into .shop-order/src and refuses another
+  # revision; docs/shop-order.md has the flow. Secrets are made by shop-order-keys in the state volume, never committed.
+  # ---------------------------------------------------------------------------
+  shop-order-keys:
+    profiles: [shop-order]
+    image: node:22.11.0-alpine3.20
+    restart: "no"
+    environment:
+      SHOP_ORDER_FRESH: ${SHOP_ORDER_FRESH:-0}
+    volumes:
+      - shop_mixed_state:/state
+      - ./marketplace/shop-order:/order:ro
+    command: ["node", "/order/keys.mjs"]
+
+  shop-order-postgres:
+    profiles: [shop-order]
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      POSTGRES_USER: shop
+      POSTGRES_DB: postgres
+    volumes:
+      - shop_order_postgres_data:/var/lib/postgresql/data
+      - shop_mixed_state:/state:ro
+      - ./marketplace/shop-order/postgres-init.sh:/docker-entrypoint-initdb.d/10-shop-order.sh:ro
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -a; . /state/order/postgres.env; set +a
+        exec docker-entrypoint.sh postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shop -d postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  shop-order-locks:
+    profiles: [shop-order]
+    image: bitkit-docker/locks-server:${SHOP_ORDER_LOCKS_REV:-01cfeca14c7b5d385d8c3536c0cb4e1af81b458c}
+    build:
+      context: ./.shop-order/src/locks
+    restart: "no"
+    user: "0:0" # reads its secrets in the state volume (mode 0600)
+    depends_on:
+      shop-order-postgres:
+        condition: service_healthy
+      shop-mixed-paykit:
+        condition: service_started
+    volumes:
+      - shop_mixed_state:/state:ro
+      - ./marketplace/shop-order:/order:ro
+      - ./.shop-order/run:/run/order:ro
+    entrypoint: ["/bin/sh", "/order/start.sh", "locks"]
+    ports:
+      - "127.0.0.1:23120:3000"
+
+  shop-order-service:
+    profiles: [shop-order]
+    image: bitkit-docker/marketplace-service:${SHOP_ORDER_SERVICE_REV:-005b0707e6047b388ce032f4b51a2e0ed9e3a752}
+    build:
+      context: ./.shop-order/src/service
+    restart: "no"
+    user: "0:0" # reads its secrets in the state volume (mode 0600)
+    depends_on:
+      shop-order-postgres:
+        condition: service_healthy
+    volumes:
+      - shop_mixed_state:/state:ro
+      - ./marketplace/shop-order:/order:ro
+      - ./.shop-order/run:/run/order:ro
+    entrypoint: ["/bin/sh", "/order/start.sh", "service"]
+    ports:
+      - "127.0.0.1:23130:8080"
+
+  # The Shop BFF's own tables (db/bff in the Shop source), applied once to the bff database.
+  shop-order-bff-migrate:
+    profiles: [shop-order]
+    image: postgres:16-alpine
+    restart: "no"
+    depends_on:
+      shop-order-postgres:
+        condition: service_healthy
+    volumes:
+      - shop_mixed_state:/state
+      - ./.shop-order/src/shop/db/bff:/bff:ro
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        [ -e /state/order/bff-migrated ] && { echo 'bff tables already applied'; exit 0; }
+        set -a; . /state/order/postgres.env; set +a
+        for file in /bff/*.sql; do
+          PGPASSWORD="$$POSTGRES_PASSWORD" psql -v ON_ERROR_STOP=1 -h shop-order-postgres -U shop -d bff -f "$$file"
+        done
+        date -u > /state/order/bff-migrated
+
+  shop-order-shop:
+    profiles: [shop-order]
+    image: bitkit-docker/pubky-marketplace:${SHOP_ORDER_SHOP_REV:-fbe3babba0c3c05990571221b5d4dc0c31788e68}
+    build:
+      context: ./.shop-order/src/shop
+    restart: "no"
+    user: "0:0" # reads the BFF secrets in the state volume (mode 0600)
+    depends_on:
+      shop-order-service:
+        condition: service_started
+    volumes:
+      - shop_mixed_state:/state:ro
+      - ./marketplace/shop-order:/order:ro
+      - ./.shop-order/run:/run/order:ro
+    entrypoint: ["/bin/sh", "/order/start.sh", "shop"]
+    ports:
+      - "127.0.0.1:23140:3000"
+
+  shop-order-locks-tunnel:
+    profiles: [shop-order]
+    image: bitkit-docker/shop-mixed-tunnel:2026.9.3
+    build:
+      context: ./marketplace/shop-mixed
+      dockerfile: tunnel.Dockerfile
+    restart: "no"
+    command: ["tunnel", "--metrics", "0.0.0.0:23121", "--url", "http://shop-order-locks:3000"]
+    ports:
+      - "127.0.0.1:23121:23121"
+
+  shop-order-service-tunnel:
+    profiles: [shop-order]
+    image: bitkit-docker/shop-mixed-tunnel:2026.9.3
+    build:
+      context: ./marketplace/shop-mixed
+      dockerfile: tunnel.Dockerfile
+    restart: "no"
+    command: ["tunnel", "--metrics", "0.0.0.0:23131", "--url", "http://shop-order-service:8080"]
+    ports:
+      - "127.0.0.1:23131:23131"
+
+  shop-order-shop-tunnel:
+    profiles: [shop-order]
+    image: bitkit-docker/shop-mixed-tunnel:2026.9.3
+    build:
+      context: ./marketplace/shop-mixed
+      dockerfile: tunnel.Dockerfile
+    restart: "no"
+    command: ["tunnel", "--metrics", "0.0.0.0:23141", "--url", "http://shop-order-shop:3000"]
+    ports:
+      - "127.0.0.1:23141:23141"
+
 volumes:
   trezor_emulator_state:
   trezor_emulator_logs:
@@ -724,5 +877,6 @@ volumes:
   marketplace_state:
   shop_mixed_postgres_data:
   shop_mixed_state:
+  shop_order_postgres_data:
 
 networks: {}
