@@ -786,7 +786,7 @@ async function purchase(args) {
   if (!Number.isInteger(sats) || sats <= 0) fail('--sats must be a positive integer');
   const buyerArg = flag(args, '--buyer') ?? (STAGING ? fail('usage: purchase --buyer <the Bitkit buyer pubky> [--sats N]') : 'headless');
   const fixture = await readFixture();
-  const seller = pickSeller(fixture, flag(args, '--seller') ?? 'headless');
+  const seller = pickSeller(fixture, flag(args, '--seller'));
   await waitForPaykit();
   if (seller.kind !== 'headless') {
     const setup = await setupStatus(seller.pubky);
