@@ -10,3 +10,5 @@ target/
 __pycache__/
 .marketplace/
 .shop-order/
+
+.usdt/

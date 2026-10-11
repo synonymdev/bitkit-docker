@@ -1,0 +1,26 @@
+services:
+  shop-mixed-paykit:
+    environment:
+      PAYKIT_CONFIG: /tmp/usdt-paykit.toml
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until [ -s /state/paykit/paykit-server.toml ] && [ -s /state/paykit/master-key ]; do sleep 1; done
+        cp /state/paykit/paykit-server.toml /tmp/usdt-paykit.toml
+        printf '\n[usdt]\nrpc_url = "http://127.0.0.1:23450"\n' >> /tmp/usdt-paykit.toml
+        PAYKIT_MASTER_KEY="$$(cat /state/paykit/master-key)"
+        export PAYKIT_MASTER_KEY
+        exec /usr/local/bin/paykit-server
+  usdt-shop-rpc:
+    profiles: [shop-order]
+    image: node:22.11.0-alpine3.20
+    restart: "no"
+    network_mode: service:shop-mixed-paykit
+    depends_on:
+      - shop-mixed-paykit
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./usdt:/fixture:ro
+    command: [node, /fixture/shop-rpc.cjs]
