@@ -12,16 +12,12 @@ test, for example a Paykit version the staging Paykit Server does not run.
 
 | Component | Revision | Built from |
 | --- | --- | --- |
-| Shop | pubky/pubky-marketplace#154, fbe3babba0c3c05990571221b5d4dc0c31788e68 | the repository's Dockerfile |
+| Shop | pubky/pubky-marketplace, af2866f58c8706e275a3028e41168c5976305808 | the repository's Dockerfile |
 | Marketplace service | pubky/pubky-marketplace-service#98, 005b0707e6047b388ce032f4b51a2e0ed9e3a752 | the repository's Dockerfile |
-| Lock Server | pubky/locks v0.1.0-rc10, 01cfeca14c7b5d385d8c3536c0cb4e1af81b458c | the repository's Dockerfile |
+| Lock Server | pubky/locks#75, be3f1b4d83b7318585d724fa6a429e1e5b3b0399 | the repository's Dockerfile |
 | Paykit Server | v0.1.0-rc11, 662dca0619a9aa2962bcd677bd5ddd4563cd2784 (paykit-rs ad3c7224 = rc72) | `marketplace/shop-mixed` |
 
-The Shop was tested at fbe3babb; pubky/pubky-marketplace#154 later moved to 84934516 for review changes to the seller-readiness
-source and the buyer key-record gate, with the Locks payment path unchanged. The pin stays at the tested commit until #154 merges.
-
-`./shop-order fetch` checks out each source at exactly that commit and refuses another. These are the commits the Android
-(aa330959, devDebug) and iOS (bb02e835, Debug) order-paid acceptance ran on, on 10 Oct.
+`./shop-order fetch` checks out each source at its pinned commit. The Shop and Lock Server both use the denomination-aware seller setup API. Keep these revisions paired when overriding them.
 
 ## Run
 
@@ -32,7 +28,7 @@ SHOP_ORDER_PROVISIONING=1 ./shop-order fetch   # the pinned sources, plus the se
 ./shop-order health                            # readiness, revisions, Paykit's trusted keys
 ```
 
-The first build compiles three Rust services and the Shop, and the Shop's build needs about 6 GB of memory. Each start gets new
+The first build compiles three Rust services and the Shop. Startup builds the apps sequentially, and the Shop build uses a 3 GB Node heap per process. Next.js also starts workers, so allow additional Docker memory; an 8 GB VM can exhaust memory while the full stack is running. `SHOP_ORDER_NODE_HEAP_MB` overrides the per-process heap, but lowering it can make compilation fail. Each start gets new
 quick-tunnel URLs; `up` writes them to `.shop-order/run/urls.env` and every origin setting is filled from them.
 
 ## Seller

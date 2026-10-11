@@ -52,7 +52,7 @@ def main():
     token, seller = session['session_token'], session['creator'].removeprefix('pubky')
     base = args.locks_url.rstrip('/')
 
-    status, ready = call(base, 'GET', '/creator/paykit/setup-status', token)
+    status, ready = call(base, 'GET', '/creator/paykit/setup-status?asset=BTC', token)
     if status != 200 or not isinstance(ready, dict) or ready.get('status') != 'ready':
         sys.exit(f'the seller is not ready on the Lock Server ({status}): connect Locks, reload, then do the Paykit setup')
     status, registered = call(base, 'PUT', f'/creator/priv-resources/content/{args.content.name}', token,

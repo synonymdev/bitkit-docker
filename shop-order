@@ -6,17 +6,13 @@ set -euo pipefail
 CLI_NAME="$(basename "$0")"
 cd "$(dirname "$0")"
 
-# The commits the Android and iOS order-paid acceptance ran on (10 Oct). Another revision is refused unless set here on purpose.
-if [ "${SHOP_ORDER_USDT:-0}" = 1 ]; then
-  # USDT access decisions require the per-rail verifier.
-  export SHOP_ORDER_LOCKS_REV=${SHOP_ORDER_LOCKS_REV:-15b81eb0c25f693124d2d3ea956586f407170a63}
-fi
+# Pin the matching denomination-aware Locks and Shop contracts.
 LOCKS_REPO=https://github.com/pubky/locks.git
-LOCKS_REV=${SHOP_ORDER_LOCKS_REV:-01cfeca14c7b5d385d8c3536c0cb4e1af81b458c} # v0.1.0-rc10
+LOCKS_REV=${SHOP_ORDER_LOCKS_REV:-be3f1b4d83b7318585d724fa6a429e1e5b3b0399} # pubky/locks#75
 SERVICE_REPO=https://github.com/pubky/pubky-marketplace-service.git
 SERVICE_REV=${SHOP_ORDER_SERVICE_REV:-005b0707e6047b388ce032f4b51a2e0ed9e3a752} # pubky-marketplace-service#98
 SHOP_REPO=https://github.com/pubky/pubky-marketplace.git
-SHOP_REV=${SHOP_ORDER_SHOP_REV:-fbe3babba0c3c05990571221b5d4dc0c31788e68} # pubky-marketplace#154
+SHOP_REV=${SHOP_ORDER_SHOP_REV:-af2866f58c8706e275a3028e41168c5976305808}
 export SHOP_ORDER_LOCKS_REV=$LOCKS_REV SHOP_ORDER_SERVICE_REV=$SERVICE_REV SHOP_ORDER_SHOP_REV=$SHOP_REV
 
 # Its own compose project, never a QA lane's (a lane's cleanup removes that lane's project), whatever COMPOSE_PROJECT_NAME says.
@@ -121,7 +117,10 @@ up() {
   progress "Postgres, the Lock Server, the marketplace service, the Shop BFF tables and the Shop"
   compose up -d --build shop-order-postgres
   compose run --rm --quiet-build shop-order-bff-migrate
-  compose up -d --build "${APPS[@]}"
+  # Build each app separately so Rust and Next.js do not compete with the running test chain for memory.
+  for app in shop-order-locks shop-order-service shop-order-shop; do compose build "$app"; done
+  # The base is already running; keep its network namespace for the USDT RPC sidecar.
+  compose up -d --no-build --no-deps "${APPS[@]}"
   wait_http "http://$(published shop-mixed-paykit 3001)/health/ready" "Paykit Server"
   wait_http "http://$(published shop-order-locks 3000)/readyz" "the Lock Server"
   wait_http "http://$(published shop-order-service 8080)/ready" "the marketplace service"

@@ -712,11 +712,10 @@ services:
     command: ["init-and-stay"]
 
   # ---------------------------------------------------------------------------
-  # A Shop order paid end to end on our own servers with Synonym's staging homeserver (profile "shop-order", on top of
-  # shop-mixed's Paykit Server rc11): the Lock Server v0.1.0-rc10, the marketplace service and the Shop at the commits that ran
-  # the Android and iOS order-paid acceptance (10 Oct), Postgres for the three, and a quick tunnel for each URL a phone or the
-  # seller's browser opens. ./shop-order fetches each source at its exact commit into .shop-order/src and refuses another
-  # revision; docs/shop-order.md has the flow. Secrets are made by shop-order-keys in the state volume, never committed.
+  # Local Shop checkout with Synonym's staging homeserver (profile "shop-order", on top of shop-mixed): Paykit, Locks,
+  # the marketplace service, Shop and Postgres, with tunnels for the phone and seller browser. ./shop-order fetches
+  # the paired source revisions into .shop-order/src; docs/shop-order.md has the flow. Secrets are made once by
+  # shop-order-keys in the state volume, never committed.
   # ---------------------------------------------------------------------------
   shop-order-keys:
     profiles: [shop-order]
@@ -754,7 +753,7 @@ services:
 
   shop-order-locks:
     profiles: [shop-order]
-    image: bitkit-docker/locks-server:${SHOP_ORDER_LOCKS_REV:-01cfeca14c7b5d385d8c3536c0cb4e1af81b458c}
+    image: bitkit-docker/locks-server:${SHOP_ORDER_LOCKS_REV:-be3f1b4d83b7318585d724fa6a429e1e5b3b0399}
     build:
       context: ./.shop-order/src/locks
     restart: "no"
@@ -815,9 +814,11 @@ services:
 
   shop-order-shop:
     profiles: [shop-order]
-    image: bitkit-docker/pubky-marketplace:${SHOP_ORDER_SHOP_REV:-fbe3babba0c3c05990571221b5d4dc0c31788e68}
+    image: bitkit-docker/pubky-marketplace:${SHOP_ORDER_SHOP_REV:-af2866f58c8706e275a3028e41168c5976305808}
     build:
       context: ./.shop-order/src/shop
+      args:
+        NODE_MAX_OLD_SPACE_SIZE: ${SHOP_ORDER_NODE_HEAP_MB:-3072}
     restart: "no"
     user: "0:0" # reads the BFF secrets in the state volume (mode 0600)
     depends_on:

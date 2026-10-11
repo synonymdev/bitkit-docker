@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Simplify LND funding step in README to a single command instead of clipboard-based two-step flow
 
 ### Fixed
+- Pair the Shop and Lock Server denomination-aware setup API, including the seller provisioning helper
+- Bound the Shop build Node heap and serialize app builds to limit peak Docker memory use
+- Preserve the payment server's network namespace when starting Shop apps so the USDT verifier keeps its RPC connection
 - Fund the payment request issuer's wallet before `/pay`, which failed with insufficient funds on a fresh regtest chain
 - Clear stale X display locks in `scripts/trezor-emulator` before starting the emulator, fixing `RuntimeError('Emulator process died')` caused by Xvfb refusing to start over a leftover `/tmp/.X<n>-lock`
 - Validate LNURL-withdraw callback invoices by millisatoshis (`num_msat`) to preserve msat precision for min/max range checks

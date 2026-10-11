@@ -670,10 +670,8 @@ The headless seller and buyer of the `marketplace` profile need the local testne
 #### Shop Order on Our Own Servers
 
 The `shop-order` profile adds the rest of the Shop to `shop-mixed`, so a Bitkit buyer can pay a Pubky Ring seller's digital listing
-and the same marketplace order becomes paid: the Lock Server v0.1.0-rc10, the marketplace service (pubky-marketplace-service#98,
-`005b0707`) and the Shop (pubky-marketplace#154, `fbe3babb`), the commits the Android and iOS order-paid acceptance ran on, with
-Postgres, a quick tunnel per public URL, and keys made once and kept. Synonym's staging Shop stays the first route; use this when it
-cannot serve the build under test. Needs Docker, `curl`, `jq`, `git` and `python3`, and about 6 GB free for the Shop's build.
+and the same marketplace order becomes paid. The pinned Shop, Lock Server and marketplace service share the upstream Paykit
+contract, with Postgres, a quick tunnel per public URL, and staging Pubky services. Sources and images are pinned in `shop-order`.
 
 ```bash
 SHOP_ORDER_PROVISIONING=1 ./shop-order fetch   # pinned sources, plus the seller's provisioning page
@@ -681,6 +679,8 @@ SHOP_ORDER_PROVISIONING=1 ./shop-order fetch   # pinned sources, plus the seller
 ./shop-order lock --session-file seller-locks-session.json --content product.txt --sats 1000   # the listing's digitalLock
 ./shop-order down --keep-data                  # stop; keeps databases, keys and the seller's setup
 ```
+
+For local USDT settlement, start `./usdt-fixture up` first and set `SHOP_ORDER_USDT=1` for every Shop command. Both the app and Paykit Server then verify payments on the same fork. Seller setup in Bitkit must include the optional USDT address. Fund the buyer with `./usdt-fixture fund ADDRESS 20`, then pay the Shop request in USDT. Keep staging Pubky and rate services.
 
 See [docs/shop-order.md](docs/shop-order.md) for the seller and buyer steps, the pass criteria and every setting.
 
