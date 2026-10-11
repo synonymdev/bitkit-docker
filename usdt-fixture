@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
+# Explicit image names are shared across Compose projects. Fingerprint the actual
+# build inputs so another checkout cannot replace this fixture's images.
+USDT_IMAGE_TAG=$(
+  git ls-files -- docker-compose.yml usdt-fixture usdt |
+    while IFS= read -r file; do
+      printf '%s\n' "$file"
+      git hash-object -- "$file"
+    done | git hash-object --stdin
+)
+export USDT_IMAGE_TAG
 PROJECT=${USDT_PROJECT:-usdt-fixture}
 COMPOSE=(docker compose --project-name "$PROJECT" --profile usdt)
 SERVICES=(usdt-fixture usdt-node usdt-alto usdt-gateway)

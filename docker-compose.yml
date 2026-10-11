@@ -869,7 +869,7 @@ services:
   # Shared loopback matches Core/gateway local endpoint validation.
   usdt-fixture:
     profiles: [usdt]
-    image: bitkit-docker/usdt-fixture:local
+    image: bitkit-docker/usdt-fixture:${USDT_IMAGE_TAG:-unbuilt}
     build:
       context: ./.usdt/build
       dockerfile: usdt/Dockerfile
@@ -895,7 +895,7 @@ services:
 
   usdt-node:
     profiles: [usdt]
-    image: bitkit-docker/usdt-fixture:local
+    image: bitkit-docker/usdt-fixture:${USDT_IMAGE_TAG:-unbuilt}
     init: true
     restart: "no"
     network_mode: service:usdt-fixture
@@ -908,7 +908,7 @@ services:
 
   usdt-alto:
     profiles: [usdt]
-    image: bitkit-docker/usdt-fixture:local
+    image: bitkit-docker/usdt-fixture:${USDT_IMAGE_TAG:-unbuilt}
     init: true
     restart: "no"
     network_mode: service:usdt-fixture
@@ -928,7 +928,7 @@ services:
 
   usdt-gateway:
     profiles: [usdt]
-    image: bitkit-docker/usdt-gateway:local
+    image: bitkit-docker/usdt-gateway:${USDT_IMAGE_TAG:-unbuilt}
     build:
       context: ./.usdt/build
       dockerfile: usdt/Dockerfile
@@ -962,7 +962,7 @@ services:
 
   usdt-tools:
     profiles: [usdt]
-    image: bitkit-docker/usdt-fixture:local
+    image: bitkit-docker/usdt-fixture:${USDT_IMAGE_TAG:-unbuilt}
     network_mode: service:usdt-fixture
     depends_on:
       usdt-gateway:
