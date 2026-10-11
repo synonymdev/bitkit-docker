@@ -864,7 +864,115 @@ services:
     ports:
       - "127.0.0.1:23141:23141"
 
+  # USDT test chain and provider fixtures. Opt in with ./usdt-fixture.
+  # Shared loopback matches Core/gateway local endpoint validation.
+  usdt-fixture:
+    profiles: [usdt]
+    image: bitkit-docker/usdt-fixture:local
+    build:
+      context: ./.usdt/build
+      dockerfile: usdt/Dockerfile
+      target: fixture
+    # File-backed Compose secrets retain host ownership on Linux.
+    user: "0:0"
+    init: true
+    restart: "no"
+    secrets:
+      - usdt_upstream
+    environment:
+      USDT_GATEWAY_PORT: ${USDT_GATEWAY_PORT:-23453}
+      USDT_CONTROL_PORT: ${USDT_CONTROL_PORT:-23454}
+    ports:
+      - "127.0.0.1:${USDT_GATEWAY_PORT:-23453}:23453"
+      - "127.0.0.1:${USDT_CONTROL_PORT:-23454}:23454"
+    healthcheck:
+      test: ["CMD", "node", "cli.cjs", "status"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 10s
+
+  usdt-node:
+    profiles: [usdt]
+    image: bitkit-docker/usdt-fixture:local
+    init: true
+    restart: "no"
+    network_mode: service:usdt-fixture
+    depends_on:
+      usdt-fixture:
+        condition: service_started
+    entrypoint: [/bin/sh, -c]
+    command:
+      - node wait.cjs upstream && exec anvil --host 127.0.0.1 --port 23450 --fork-url http://127.0.0.1:23455 --fork-block-number "$$(node -p "require('./pins.json').forkBlock")" --chain-id 42161 --hardfork prague --silent --block-time 1
+
+  usdt-alto:
+    profiles: [usdt]
+    image: bitkit-docker/usdt-fixture:local
+    init: true
+    restart: "no"
+    network_mode: service:usdt-fixture
+    depends_on:
+      usdt-fixture:
+        condition: service_healthy
+    entrypoint: [/bin/sh, -c]
+    command:
+      - |
+        KEY="$$(node -p "require('viem').toHex(require('./contracts.cjs').executor.getHdKey().privateKey)")"
+        exec node node_modules/@pimlico/alto/esm/cli/alto.js --entrypoints 0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108 --rpc-url http://127.0.0.1:23450 --executor-private-keys "$$KEY" --utility-private-key "$$KEY" --port 23451 --chain-type default --safe-mode false --enable-debug-endpoints true --min-executor-balance 0 --log-level warn --json true
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('./rpc.cjs').rpc('http://127.0.0.1:23451','eth_supportedEntryPoints').catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  usdt-gateway:
+    profiles: [usdt]
+    image: bitkit-docker/usdt-gateway:local
+    build:
+      context: ./.usdt/build
+      dockerfile: usdt/Dockerfile
+      target: gateway
+    init: true
+    restart: "no"
+    network_mode: service:usdt-fixture
+    depends_on:
+      usdt-alto:
+        condition: service_healthy
+    environment:
+      NODE_ENV: test
+      HOST: 0.0.0.0
+      PORT: 23453
+      ARBITRUM_RPC_URL: http://127.0.0.1:23450
+      LOCAL_PROVIDER_URL: http://127.0.0.1:23452
+      LOCAL_ORCHESTRA_URL: http://127.0.0.1:23456
+      LOCAL_LAYERZERO_URL: http://127.0.0.1:23457
+      ORCHESTRA_API_KEY: local-orchestra-fixture
+      ORCHESTRA_BRIDGE_SECRET: abababababababababababababababababababababababababababababababab
+      ORCHESTRA_BRIDGE_NETWORKS: ethereum,polygon,base,bsc,tron,solana,plasma
+      ORCHESTRA_DEPOSIT_NETWORKS: ethereum,polygon,base,bsc,tron,solana
+      USDT_BRIDGE_NETWORKS: ethereum,polygon,plasma,stable
+      REQUESTS_PER_MINUTE: 10000
+      GLOBAL_REQUESTS_PER_MINUTE: 100000
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:23453/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  usdt-tools:
+    profiles: [usdt]
+    image: bitkit-docker/usdt-fixture:local
+    network_mode: service:usdt-fixture
+    depends_on:
+      usdt-gateway:
+        condition: service_healthy
+    volumes:
+      - usdt_state:/state
+      - ./.usdt/evidence:/evidence:ro
+    entrypoint: ["node", "cli.cjs"]
+
 volumes:
+  usdt_state:
   trezor_emulator_state:
   trezor_emulator_logs:
   bitcoin_home:
@@ -878,5 +986,9 @@ volumes:
   shop_mixed_postgres_data:
   shop_mixed_state:
   shop_order_postgres_data:
+
+secrets:
+  usdt_upstream:
+    file: ${USDT_TEST_ENV_FILE:-/dev/null}
 
 networks: {}

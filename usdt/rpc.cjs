@@ -39,11 +39,11 @@ async function rpc(url, method, params = []) {
   return body.result;
 }
 
-async function serve(port, dispatch) {
+async function serve(port, dispatch, host = '127.0.0.1') {
   const server = createServer(async (req, res) => {
     let call;
     try {
-      // Test controls are loopback-only and cannot be called from a web page.
+      // Control ports are published only on host loopback; reject browser-origin requests.
       if (req.method !== 'POST' || req.headers.origin) throw new Error('Use a local RPC client');
       let body = '';
       for await (const chunk of req) {
@@ -71,7 +71,7 @@ async function serve(port, dispatch) {
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, '127.0.0.1', resolve);
+    server.listen(port, host, resolve);
   });
   return server;
 }

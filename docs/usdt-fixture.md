@@ -1,26 +1,32 @@
 # Local USDT execution
 
-`./usdt-fixture` runs an isolated Arbitrum state fork, Alto, a test token-paymaster signer and the real Bitkit USDT gateway as host processes. This works without Docker on hosted macOS runners. It does not start or replace Bitcoin, Lightning, VSS, Pubky or rate services.
+`./usdt-fixture` runs an isolated Arbitrum state fork, Alto, a test token-paymaster signer and the real Bitkit USDT gateway in the opt-in `usdt` Compose profile. It uses a dedicated project (`usdt-fixture` by default), leaving the existing Bitcoin, Lightning, VSS, Pubky and rate services alone.
 
 ## Versions and state
 
-Install Node 22.23.1 (or a later Node 22), npm, Rust, Git and tar. `setup` downloads Anvil with a verified release checksum and builds the gateway and Core wallet at the revisions in `usdt/pins.json`. Alto and viem are locked by `usdt/package-lock.json`; Rust dependencies are locked by `usdt/wallet/Cargo.lock`. Core is fetched shallowly into `.usdt/core` to avoid cloning its binary release history. Its published 0.8.0-rc2 source is used without modifications.
+Install Docker with Compose, Git, jq and tar. Your Git credentials must allow reads of the pinned Core and service repositories. `build` fetches their exact revisions from `usdt/pins.json` into ignored `.usdt/sources/` and exports clean source trees for the container build. Credentials and Git metadata stay outside images. Anvil's Linux release is checksum-verified; Alto and viem use `usdt/package-lock.json`; the Core wallet uses `usdt/wallet/Cargo.lock`. Node and Rust run inside pinned build images, with no host toolchain required. Linux AMD64 and ARM64 are supported. CI must use a Docker-capable runner.
 
-Runtime files, test wallet databases and process logs are kept in ignored `.usdt/`. The foreground launcher owns its processes and stops them on Ctrl-C. A new run starts a new chain. Do not restart/reset the fixture midway through an app recovery journey. Use dedicated test apps, seeds and Paykit peers; a chain reset does not reset their databases or VSS backups.
+`up` starts four services and waits for health: the fixture/control server, Anvil, Alto and the gateway. They share a network namespace so the existing Core and gateway localhost checks still apply. One-off checks and wallet commands run in the tools container. `logs` follows service output; `ps` shows health. Wallet databases live in the `usdt_state` named volume; the chain and provider state are held in memory. `down` removes only this Compose project's containers, network and disposable wallet volume.
 
-The upstream must serve historical state at the pinned block. Put `ARBITRUM_RPC_URL=https://...` in an untracked private file and pass its path as `USDT_TEST_ENV_FILE`. Only the read proxy knows that URL; Anvil receives a localhost URL. The proxy allowlists reads and blocks transaction submission, wallet methods and node mutations. Cold startup and new account/storage lookups can incur provider RPC charges. No public-chain tokens are spent.
+Keep the stack running through app restart, reinstall and VSS recovery tests. Do not restart individual services or reset the chain mid-scenario. Repeated `up` leaves already-running services intact. Use `down` followed by `up` for a fresh stack, with matching dedicated app/peer state. `reset` reverts the live chain and clears provider/bundler state but does not reset wallet databases or VSS backups. Never use a funded mainnet app or real seed.
+
+The upstream must serve historical state at the pinned block. Put only `ARBITRUM_RPC_URL=https://...` in an untracked private file and export its absolute path as `USDT_TEST_ENV_FILE`. Compose mounts that file read-only as a secret in the fixture container; it is not an environment value, build argument or image layer. The fixture server runs as container root to read a private file regardless of its Linux host owner; the node, bundler, gateway and wallet tools run as non-root. Only the read proxy uses the URL; Anvil receives a localhost URL. The proxy allowlists reads and blocks transaction submission, wallet methods and node mutations. Cold startup and new storage lookups can incur provider RPC charges. No public-chain tokens are spent.
 
 ## Commands
 
 ```sh
-./usdt-fixture setup
-USDT_TEST_ENV_FILE=/absolute/path/to/private.env ./usdt-fixture run
-# Another terminal, from this checkout:
-./usdt-fixture status
+./usdt-fixture build
+export USDT_TEST_ENV_FILE=/absolute/path/to/private.env
+./usdt-fixture up
+./usdt-fixture ps
+./usdt-fixture check
 ./usdt-fixture smoke
+./usdt-fixture bridge-smoke
 ./usdt-fixture fund 0xYOUR_TEST_WALLET 10
 ./usdt-fixture balance 0xYOUR_TEST_WALLET
 eval "$(./usdt-fixture env)"
+# When all journeys are finished:
+./usdt-fixture down
 ```
 
 `fund` executes an actual ERC-20 transfer from a storage-funded donor, producing real receipt/history events. It does not overwrite the recipient balance. `smoke` creates independent disposable Core wallets and checks first-use EIP-7702 delegation without ETH, two sends, USDT fees and the approved fee bound, pending/manual inclusion across wallet reopen, proof verification, changed request binding and rejected paymaster authorization. It restores provider/bundler modes and removes only its own temporary wallet files.
@@ -39,7 +45,7 @@ eval "$(./usdt-fixture env)"
 | `wallet proof ID BINDING_FILE` | Create the standard proof after execution |
 | `wallet verify BINDING_FILE PROOF_FILE` | Verify receipt, token, recipient and signature using the recipient Core wallet |
 
-`USDT_WALLET_NAME` chooses a deterministic public test account; `USDT_WALLET_DIR` chooses its local database directory. The mnemonic and derivation passphrases are public test material. Never use them for actual funds. `wallet` uses a no-op backup adapter; it is an execution/proof tool, not a VSS test. App recovery tests must use the existing VSS helpers.
+`USDT_WALLET_NAME` chooses a deterministic public test account. Wallet databases are kept under `/state/wallet` in the named volume. Put binding/proof input files in `.usdt/evidence/` on the host; tools read them at `/evidence/`. Redirect a wallet command's JSON output to a host file to save a proof. The mnemonic and derivation passphrases are public test material. Never use them for actual funds. `wallet` uses a no-op backup adapter; it is an execution/proof tool, not a VSS test. App recovery tests must use the existing VSS helpers.
 
 The binding JSON uses Core's fields: `payer`, `payee`, `payment_app_id`, `payment_request_id`, `payment_reference`, `payment_endpoint_identifier`, `period_starts_at`, `period_ends_at`, `conversion_quote_id`. Use exact authenticated SDK values; absent optional values are empty strings. Proof verification alone does not check the requested price/deadline or prevent evidence reuse: the receiving app/server owns those rules.
 
@@ -50,9 +56,9 @@ The binding JSON uses Core's fields: `payer`, `payee`, `payment_app_id`, `paymen
 - Alto runs with `safe-mode=false`: its strict tracing path does not handle this Anvil/EIP-7702 setup. Contract simulation and execution remain real; production bundler reputation/storage-access policy is not covered.
 - Anvil is an EVM fork, not the Arbitrum sequencer or L1 rollup. Local inclusion/finality and gas do not prove real Arbitrum finality or Nitro fees.
 - Orchestra operators, external deposit monitoring, route liquidity and LayerZero relaying are simulated by local HTTP providers. The real gateway validates their responses through `LOCAL_ORCHESTRA_URL` and `LOCAL_LAYERZERO_URL`; neither provider contacts its public API. Arbitrum credits/refunds execute real token transfers. Off-Arbitrum hashes and delivery states are fixture evidence, not destination-chain execution. Live operator delivery/refunds still need separate acceptance.
-- Keep this on a trusted development host. Control, node, provider, gateway and upstream ports bind loopback. Alto 0.0.21 binds its debug RPC on all interfaces; do not expose port 23451 from the runner or run the fixture on a public host.
+- Keep this on a trusted development host and private Docker network. Only gateway and control ports are published, on host loopback. Node, bundler, signer and upstream ports are not published. Other containers on the fixture network are trusted test infrastructure.
 
-Ports: node 23450, Alto 23451, signing/provider router 23452, app gateway 23453, fixture controls 23454, upstream read proxy 23455, Orchestra 23456, LayerZero 23457. Android uses `adb reverse tcp:23453 tcp:23453`; iOS uses loopback. Core intentionally does not accept `10.0.2.2` HTTP endpoints.
+Published ports default to gateway 23453 and controls 23454; set `USDT_GATEWAY_PORT` and `USDT_CONTROL_PORT` before `up` and `env` to change them. `USDT_PROJECT` selects the isolated Compose project. Keep these settings and `USDT_TEST_ENV_FILE` consistent across commands. Internal ports are node 23450, Alto 23451, signing/router 23452, upstream read proxy 23455, Orchestra 23456, LayerZero 23457 and the read-only Shop RPC 23458. Android reverses the selected gateway port with adb; iOS uses loopback. Core intentionally does not accept `10.0.2.2` HTTP endpoints.
 
 ## Bridge scenarios
 
@@ -128,23 +134,22 @@ start a fresh isolated scenario after diagnosing the failure.
 The optional Shop overlay preserves staging Pubky, rate feeds and Bitcoin. It enables Paykit Server's existing USDT RPC setting and pins Locks to the per-rail verification draft (`pubky/locks#75`, exact revision in `shop-order`). No new payment-verification code is needed in those services for local execution.
 
 ```sh
-# Start usdt-fixture run first. Use a separate Shop project and keep it for recovery tests.
+# Start ./usdt-fixture up first. Use a separate Shop project and keep it for recovery tests.
 SHOP_ORDER_USDT=1 SHOP_ORDER_PROJECT=shop-usdt ./shop-order fetch
 SHOP_ORDER_USDT=1 SHOP_ORDER_PROJECT=shop-usdt ./shop-order up
 SHOP_ORDER_USDT=1 SHOP_ORDER_PROJECT=shop-usdt ./shop-order health
 ```
 
-Follow the existing [Shop setup](shop-order.md) to register the seller and enable its USDT receiving address. Fund the payer on this fork, pay the original request, then assert the server's per-rail status and actual unlock. The overlay's read-only RPC sidecar shares Paykit Server's loopback network namespace. Host connectivity uses Docker Desktop's `host.docker.internal`; on Linux, run the fork where the container can reach it through an equivalent private host route before using this overlay. Do not point the verifier at mainnet while the app uses the fork.
+Follow the existing [Shop setup](shop-order.md) to register the seller and enable its USDT receiving address. Fund the payer on this fork, pay the original request, then assert the server's per-rail status and actual unlock. The overlay's read-only RPC sidecar shares Paykit Server's loopback network namespace. It reaches the fork through the fixture's private Compose network on Linux and Docker Desktop, without exposing node mutation methods or using a host route. Use the same `USDT_PROJECT` as the running fixture. An explicit `SHOP_ORDER_LOCKS_REV` overrides the default USDT-capable Locks revision. Do not point the verifier at mainnet while the app uses the fork.
 
 The overlay is infrastructure wiring; a paid USDT Shop journey and browser unlock remain acceptance tests for the E2E suite. Reset only the dedicated `shop-usdt` project. Always use the same `SHOP_ORDER_USDT=1` and project value for subsequent commands, including teardown.
 
 ## Checks
 
 ```sh
-npm --prefix usdt run lint
-npm --prefix usdt test
-cargo fmt --manifest-path usdt/wallet/Cargo.toml --check
-cargo clippy --locked --manifest-path usdt/wallet/Cargo.toml --all-targets --no-deps -- -D warnings
+./usdt-fixture build # Includes Rust fmt/build/clippy and fixture lint/tests
+./usdt-fixture up
+./usdt-fixture check
 ./usdt-fixture smoke
 ./usdt-fixture bridge-smoke
 ```

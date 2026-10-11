@@ -7,9 +7,10 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
 Run the shared Arbitrum fork, Alto and gateway without spending mainnet funds:
 
 ```sh
-./usdt-fixture setup
-USDT_TEST_ENV_FILE=/absolute/path/to/private.env ./usdt-fixture run
-# In another terminal:
+./usdt-fixture build
+export USDT_TEST_ENV_FILE=/absolute/path/to/private.env
+./usdt-fixture up
+./usdt-fixture check
 ./usdt-fixture smoke
 ./usdt-fixture bridge-smoke
 eval "$(./usdt-fixture env)"
@@ -17,8 +18,11 @@ eval "$(./usdt-fixture env)"
 ```
 
 The private file contains `ARBITRUM_RPC_URL=https://...` with historical-state access.
-Requires Node 22.23.1+, Rust, Git and tar. Keep existing staging VSS, Pubky and rate
-services. The stack also starts local Orchestra and LayerZero providers. After the
+Requires Docker Compose, Git access to the pinned Core/service repositories, jq
+and tar. Builds and tools run inside containers; no host Node or Rust is needed.
+Use `./usdt-fixture logs` to inspect services and `./usdt-fixture down` to remove
+this isolated stack and its disposable wallet volume. Keep existing staging VSS,
+Pubky and rate services. The stack also starts local Orchestra and LayerZero providers. After the
 app registers a bridge receive address, use `./usdt-fixture orchestra deposit
 ADDRESS polygon 3.5`, then `./usdt-fixture orchestra advance DEPOSIT_ID completed`
 to deliver local tokens. `orchestra list` shows outgoing quotes; `layerzero

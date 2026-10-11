@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
     ));
     let address = usdt_address(MNEMONIC.into(), passphrase.clone())?;
     let state =
-        PathBuf::from(std::env::var("USDT_WALLET_DIR").unwrap_or_else(|_| ".usdt/wallet".into()));
+        PathBuf::from(std::env::var("USDT_WALLET_DIR").unwrap_or_else(|_| "/state/wallet".into()));
     std::fs::create_dir_all(&state)?;
     let wallet = UsdtWallet::new(
         address.clone(),

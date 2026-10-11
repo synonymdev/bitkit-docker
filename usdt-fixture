@@ -1,7 +1,97 @@
 #!/usr/bin/env bash
 set -euo pipefail
-ROOT=$(cd "$(dirname "$0")" && pwd)
-if [ "${1:-help}" = setup ]; then
-  npm ci --prefix "$ROOT/usdt" --ignore-scripts --no-audit --no-fund
-fi
-exec node "$ROOT/usdt/cli.cjs" "$@"
+cd "$(dirname "$0")"
+PROJECT=${USDT_PROJECT:-usdt-fixture}
+COMPOSE=(docker compose --project-name "$PROJECT" --profile usdt)
+SERVICES=(usdt-fixture usdt-node usdt-alto usdt-gateway)
+compose() { "${COMPOSE[@]}" "$@"; }
+mkdir -p .usdt/evidence
+build() {
+  mkdir -p .usdt/sources
+  for name in core service; do
+    local repo="bitkit-$name" dir=".usdt/sources/$name" revision
+    if [ "$name" = service ]; then repo=bitkit-usdt-service; fi
+    revision=$(jq -r ".$name" usdt/pins.json)
+    if [ ! -d "$dir" ]; then
+      git init -q "$dir"
+      git -C "$dir" remote add origin "https://github.com/synonymdev/$repo.git"
+    fi
+    if [ -n "$(git -C "$dir" status --porcelain)" ]; then
+      echo "$dir contains local edits; preserve them before building." >&2
+      exit 1
+    fi
+    if ! git -C "$dir" cat-file -e "$revision^{commit}" 2>/dev/null; then
+      git -C "$dir" fetch -q --depth 1 origin "$revision"
+    fi
+    git -C "$dir" checkout -q --detach "$revision"
+  done
+  # Export only source files; credentials, Git metadata and runtime state stay outside the build context.
+  rm -rf .usdt/build
+  mkdir -p .usdt/build/core .usdt/build/service
+  for name in core service; do
+    git -C ".usdt/sources/$name" archive HEAD | tar -xf - -C ".usdt/build/$name"
+  done
+  tar --exclude=node_modules --exclude=target -cf - usdt | tar -xf - -C .usdt/build
+  compose build usdt-fixture usdt-gateway
+}
+command=${1:-help}
+if [ "$#" -gt 0 ]; then shift; fi
+case "$command" in
+  build) build ;;
+  up)
+    if [ -z "${USDT_TEST_ENV_FILE:-}" ] || [ ! -f "$USDT_TEST_ENV_FILE" ]; then
+      echo 'Set USDT_TEST_ENV_FILE to a private file containing ARBITRUM_RPC_URL=https://...' >&2
+      exit 1
+    fi
+    compose up -d --wait --wait-timeout 180 "${SERVICES[@]}"
+    ;;
+  down) compose down --volumes ;;
+  logs) compose logs --tail 100 -f "${@:-usdt-fixture}" ;;
+  ps) compose ps "${SERVICES[@]}" ;;
+  env)
+    GATEWAY="http://127.0.0.1:${USDT_GATEWAY_PORT:-23453}/v1/usdt"
+    cat <<ENV
+export USDT_RPC_URL=$GATEWAY/chain-rpc
+export USDT_BUNDLER_URL=$GATEWAY/rpc
+export USDT_DEPOSITS_URL=$GATEWAY/deposits
+export USDT_BRIDGES_URL=$GATEWAY/bridges
+export USDT_BRIDGE_NETWORKS=ethereum,polygon,plasma,stable
+export USDT_FIXTURE_URL=http://127.0.0.1:${USDT_CONTROL_PORT:-23454}
+ENV
+    ;;
+  check)
+    compose run --rm --no-deps --entrypoint /bin/sh usdt-tools -c 'npm run lint && npm test'
+    ;;
+  wallet)
+    compose run --rm --no-deps -e USDT_WALLET_NAME="${USDT_WALLET_NAME:-sender}" usdt-tools wallet "$@"
+    ;;
+  smoke|bridge-smoke|status|balance|fund|mine|reset|provider-mode|bundling|bundle|orchestra|layerzero|layerzero-mode)
+    compose run --rm --no-deps usdt-tools "$command" "$@"
+    ;;
+  help|-h|--help)
+    cat <<HELP
+Usage: ./usdt-fixture <command>
+  build             Build pinned node, bundler, gateway and Core wallet images
+  up                Start the isolated Compose stack; wait until healthy
+  ps | logs         Inspect service health or follow logs (optional service)
+  down              Remove this project's containers and disposable test-wallet volume
+  env               Print app/helper endpoint exports
+  check             Run fixture lint and protocol tests inside Docker (stack must be up)
+  smoke             Check real Core payments, fees, pending recovery and proofs
+  bridge-smoke      Check local bridge funding, receipts and refunds
+  wallet ARGS       Run the Core test wallet; read proof/binding files from /evidence
+  status            Show fixture health, versions and upstream read counts
+  fund ADDRESS USDT | balance ADDRESS | mine [COUNT]
+  provider-mode healthy|unavailable|expired|invalid-signature
+  bundling auto|manual | bundle
+  orchestra list|deposit|advance|mode|fee|quote-ttl
+  layerzero TX STATUS | layerzero-mode MODE
+  reset             Revert this chain and clear provider/bundler state; reset test apps separately
+
+Requires Docker Compose, Git, jq and tar. For up, set USDT_TEST_ENV_FILE to a private env file.
+USDT_PROJECT selects a dedicated project (default usdt-fixture); keep it constant.
+USDT_GATEWAY_PORT/USDT_CONTROL_PORT select host ports (23453/23454 by default).
+HELP
+    ;;
+  *) echo "Unknown command: $command" >&2; exit 1 ;;
+esac

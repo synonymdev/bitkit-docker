@@ -6,21 +6,16 @@ const { mkdtempSync, rmSync } = require('node:fs');
 const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
 const { rpc } = require('./rpc.cjs');
-const { urls } = require('./run.cjs');
-const { state } = require('./setup.cjs');
+const { state, urls } = require('./config.cjs');
 const exec = promisify(execFile);
 async function smoke() {
   const directory = mkdtempSync(path.join(state, 'bridge-smoke-'));
   const name = randomUUID();
   const wallet = async (account, ...args) => {
-    const { stdout } = await exec(
-      path.join(__dirname, 'wallet/target/debug/usdt-fixture-wallet'),
-      args,
-      {
-        env: { ...process.env, USDT_WALLET_DIR: directory, USDT_WALLET_NAME: `${name}-${account}` },
-        timeout: 180000,
-      },
-    );
+    const { stdout } = await exec('usdt-fixture-wallet', args, {
+      env: { ...process.env, USDT_WALLET_DIR: directory, USDT_WALLET_NAME: `${name}-${account}` },
+      timeout: 180000,
+    });
     return JSON.parse(stdout);
   };
   const control = (...args) => rpc(urls.control, 'orchestra', args);

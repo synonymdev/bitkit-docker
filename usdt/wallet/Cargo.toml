@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-bitkitcore = { path = "../../.usdt/core" }
+bitkitcore = { path = "../../core" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }

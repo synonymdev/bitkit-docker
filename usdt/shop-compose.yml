@@ -1,5 +1,6 @@
 services:
   shop-mixed-paykit:
+    networks: [default, usdt]
     environment:
       PAYKIT_CONFIG: /tmp/usdt-paykit.toml
     entrypoint:
@@ -19,8 +20,11 @@ services:
     network_mode: service:shop-mixed-paykit
     depends_on:
       - shop-mixed-paykit
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - ./usdt:/fixture:ro
     command: [node, /fixture/shop-rpc.cjs]
+
+networks:
+  usdt:
+    external: true
+    name: ${USDT_PROJECT:-usdt-fixture}_default
