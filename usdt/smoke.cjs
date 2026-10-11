@@ -11,12 +11,25 @@ const exec = promisify(execFile);
 async function smoke() {
   const directory = mkdtempSync(path.join(state, 'smoke-'));
   const runId = randomUUID();
-  const wallet = async (name, ...args) => {
+  const walletAt = async (walletDirectory, name, ...args) => {
     const { stdout } = await exec('usdt-fixture-wallet', args, {
-      env: { ...process.env, USDT_WALLET_DIR: directory, USDT_WALLET_NAME: `${runId}-${name}` },
+      env: {
+        ...process.env,
+        USDT_WALLET_DIR: walletDirectory,
+        USDT_WALLET_NAME: `${runId}-${name}`,
+      },
       timeout: 120000,
     });
     return JSON.parse(stdout);
+  };
+  const wallet = (name, ...args) => walletAt(directory, name, ...args);
+  const history = async (walletDirectory, name) => {
+    for (let i = 0; i < 20; i++) {
+      if ((await walletAt(walletDirectory, name, 'sync')).complete) {
+        return walletAt(walletDirectory, name, 'history');
+      }
+    }
+    throw new Error('Local history did not finish syncing');
   };
   const settled = async (id) => {
     for (let i = 0; i < 40; i++) {
@@ -55,8 +68,24 @@ async function smoke() {
     assert.equal((await wallet('sender', 'refresh', second.transfer.id)).status, 'Pending');
     assert.equal(BigInt(await rpc(urls.control, 'balance', [recipient])), 500000n);
     await rpc(urls.control, 'bundle');
-    await settled(second.transfer.id);
+    const secondExecuted = await settled(second.transfer.id);
     assert.equal(BigInt(await rpc(urls.control, 'balance', [recipient])), 750000n);
+
+    await rpc(urls.control, 'mine', [3]);
+    const received = await history(directory, 'recipient');
+    assert.equal(received.length, 2);
+    for (const [payment, amount] of [
+      [executed, 500000],
+      [secondExecuted, 250000],
+    ]) {
+      const transfer = received.find((item) => item.tx_hash === payment.tx_hash);
+      assert.equal(transfer?.amount, amount);
+      assert.equal(transfer?.status, 'Confirmed');
+    }
+    // Same seed, empty database: local-chain evidence must restore the incoming history.
+    const recovered = await history(path.join(directory, 'restored'), 'recipient');
+    assert.deepEqual(recovered, received);
+    assert.equal((await rpc(urls.control, 'status')).reads.eth_getLogs, undefined);
 
     const binding = {
       payer: 'fixture-payer',

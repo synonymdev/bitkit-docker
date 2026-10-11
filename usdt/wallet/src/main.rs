@@ -78,6 +78,7 @@ async fn main() -> Result<()> {
             json!(wallet.refresh_transfers().await?.into_iter().find(|transfer| transfer.id == *id))
         }
         "history" => json!(wallet.history()?),
+        "sync" => json!({"complete": wallet.sync_history().await?}),
         "deposit" => {
             let client = UsdtDepositClient::new(address, format!("{GATEWAY}/deposits"))?;
             match args.get(1).map(String::as_str) {
@@ -119,7 +120,7 @@ async fn main() -> Result<()> {
             }).await?;
             verified.map(|p| json!({"payment_id":p.payment_id,"transfer_id":p.transfer_id,"sender":p.sender,"recipient":p.recipient,"amount":p.amount,"timestamp":p.timestamp})).unwrap_or(Value::Null)
         }
-        _ => bail!("use address, balance, quote/send RECIPIENT ATOMIC_AMOUNT [Destination], deposit, refresh ID, history, proof ID BINDING_FILE, or verify BINDING_FILE PROOF_FILE"),
+        _ => bail!("use address, balance, quote/send RECIPIENT ATOMIC_AMOUNT [Destination], deposit, refresh ID, sync, history, proof ID BINDING_FILE, or verify BINDING_FILE PROOF_FILE"),
     };
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())

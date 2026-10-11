@@ -20,6 +20,25 @@ test('upstream forwards reads, blocks writes and hides provider credentials', as
   assert.deepEqual(calls, ['eth_chainId', 'eth_getCode']);
 });
 
+test('upstream preserves HTTP and JSON-RPC throttling without provider diagnostics', async (t) => {
+  const server = await serve(0, (method) => {
+    throw Object.assign(
+      new Error('private provider diagnostics'),
+      method === 'eth_chainId' ? { httpStatus: 429 } : { code: 429, data: 'secret' },
+    );
+  });
+  t.after(() => server.close());
+  const read = upstreamReader(`http://127.0.0.1:${server.address().port}`);
+  for (const method of ['eth_chainId', 'eth_getCode']) {
+    await assert.rejects(read(method, []), (error) => {
+      assert.equal(error.httpStatus, 429);
+      assert.equal(error.message, `Upstream read failed: ${method}`);
+      assert.equal(error.data, undefined);
+      return true;
+    });
+  }
+});
+
 test('local RPC preserves errors and rejects browser control requests', async (t) => {
   let calls = 0;
   const server = await serve(0, () => {

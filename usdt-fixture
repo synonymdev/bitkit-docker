@@ -84,7 +84,7 @@ Usage: ./usdt-fixture <command>
   build             Build pinned node, bundler, gateway and Core wallet images
   up                Start the isolated Compose stack; wait until healthy
   ps | logs         Inspect service health or follow logs (optional service)
-  down              Remove this project's containers and disposable test-wallet volume
+  down              Remove this project's containers, disposable wallets and fork cache
   env               Print app/helper endpoint exports
   check             Run fixture lint and protocol tests inside Docker (stack must be up)
   smoke             Check real Core payments, fees, pending recovery and proofs

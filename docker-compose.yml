@@ -903,8 +903,10 @@ services:
       usdt-fixture:
         condition: service_started
     entrypoint: [/bin/sh, -c]
+    volumes:
+      - usdt_fork_cache:/home/node/.foundry
     command:
-      - node wait.cjs upstream && exec anvil --host 127.0.0.1 --port 23450 --fork-url http://127.0.0.1:23455 --fork-block-number "$$(node -p "require('./pins.json').forkBlock")" --chain-id 42161 --hardfork prague --silent --block-time 1
+      - node wait.cjs upstream && exec anvil --host 127.0.0.1 --port 23450 --fork-url http://127.0.0.1:23455 --fork-block-number "$$(node -p "require('./pins.json').forkBlock")" --chain-id 42161 --hardfork prague --silent --block-time 1 --compute-units-per-second 150 --fork-retry-backoff 1000 --no-fork-node-info
 
   usdt-alto:
     profiles: [usdt]
@@ -973,6 +975,7 @@ services:
     entrypoint: ["node", "cli.cjs"]
 
 volumes:
+  usdt_fork_cache:
   usdt_state:
   trezor_emulator_state:
   trezor_emulator_logs:

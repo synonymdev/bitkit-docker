@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Issue payment requests payable through an LNURL-pay endpoint, with a separate proposal expiry
 
 ### Changed
+- Keep USDT test history on the local fork, pace and cache archive reads, and preserve upstream throttling for retries so ordinary E2E runs need no paid Alchemy features
 - Pin the local USDT gateway to `3d8c0b6`, including sanitized configuration errors and local LayerZero tracking support
 - Publish every host port at 1024 or above, in the 23000-23999 range for the services Bitkit does not dial by a fixed number (README "Ports" lists them)
 - Move the payment request fixture peers to paykit-rs rc65 on Pubky 0.14.0, the SDK current Bitkit builds pin (the `fixture-issuer` and `rc56-peer` service names stay)

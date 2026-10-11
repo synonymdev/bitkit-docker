@@ -18,10 +18,13 @@ eval "$(./usdt-fixture env)"
 ```
 
 The private file contains `ARBITRUM_RPC_URL=https://...` with historical-state access.
+An Alchemy Free Arbitrum endpoint is sufficient within its quota: the fixture paces
+upstream reads and excludes pre-fork mainnet logs. Payment history and recovery
+cover transfers made locally after the fork; use disposable test wallets.
 Requires Docker Compose, Git access to the pinned Core/service repositories, jq
 and tar. Builds and tools run inside containers; no host Node or Rust is needed.
 Use `./usdt-fixture logs` to inspect services and `./usdt-fixture down` to remove
-this isolated stack and its disposable wallet volume. Keep existing staging VSS,
+this isolated stack, its disposable wallets and fork-read cache. Keep existing staging VSS,
 Pubky and rate services. The stack also starts local Orchestra and LayerZero providers. After the
 app registers a bridge receive address, use `./usdt-fixture orchestra deposit
 ADDRESS polygon 3.5`, then `./usdt-fixture orchestra advance DEPOSIT_ID completed`

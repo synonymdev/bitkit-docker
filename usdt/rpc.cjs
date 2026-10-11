@@ -28,7 +28,11 @@ async function rpc(url, method, params = []) {
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
     signal: AbortSignal.timeout(30_000),
   });
-  if (!response.ok) throw new Error(`RPC returned HTTP ${response.status}`);
+  if (!response.ok) {
+    throw Object.assign(new Error(`RPC returned HTTP ${response.status}`), {
+      httpStatus: response.status,
+    });
+  }
   const body = await response.json();
   if (body.error) {
     const error = new Error(body.error.message);
@@ -81,8 +85,11 @@ function upstreamReader(url) {
     if (!READ_METHODS.has(method)) throw new Error('Upstream writes are disabled');
     try {
       return await rpc(url, method, params);
-    } catch {
-      throw new Error(`Upstream read failed: ${method}`);
+    } catch (cause) {
+      const error = new Error(`Upstream read failed: ${method}`);
+      // Preserve throttling for Anvil's retries without exposing provider diagnostics.
+      if (cause.httpStatus === 429 || cause.code === 429) error.httpStatus = 429;
+      throw error;
     }
   };
 }

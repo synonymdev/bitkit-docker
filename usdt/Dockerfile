@@ -45,6 +45,6 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY --from=sources /usr/local/bin/anvil /usr/local/bin/anvil
 COPY --from=wallet /out/usdt-fixture-wallet /usr/local/bin/usdt-fixture-wallet
 COPY usdt/*.cjs usdt/biome.json usdt/pins.json ./
-RUN npm run lint && npm test && mkdir /state && chown node:node /state
+RUN npm run lint && npm test && mkdir -p /state /home/node/.foundry && chown -R node:node /state /home/node/.foundry
 USER node
 CMD ["node", "server.cjs"]

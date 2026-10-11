@@ -40,6 +40,8 @@ async function run() {
     const read = upstreamReader(upstream);
     servers.push(
       await serve(ports.upstream, async (method, params) => {
+        // Test history starts after the fork; Anvil keeps locally mined logs itself.
+        if (method === 'eth_getLogs') return [];
         reads[method] = (reads[method] ?? 0) + 1;
         return read(method, params);
       }),
