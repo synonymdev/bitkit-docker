@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use bitkitcore::{
-    usdt_address, UsdtBackup, UsdtDestination, UsdtError, UsdtPaymentProof,
-    UsdtPaymentProofBinding, UsdtWallet,
+    usdt_address, UsdtBackup, UsdtDepositClient, UsdtDepositNetwork, UsdtDestination, UsdtError,
+    UsdtPaymentProof, UsdtPaymentProofBinding, UsdtWallet,
 };
 use serde_json::{json, Value};
 use std::{path::PathBuf, sync::Arc};
@@ -55,16 +55,21 @@ async fn main() -> Result<()> {
             .into(),
         format!("{GATEWAY}/chain-rpc"),
         format!("{GATEWAY}/rpc"),
-        None,
+        Some(format!("{GATEWAY}/bridges")),
         Arc::new(Backup),
     )?;
     let result = match command {
         "address" => json!({"address":address}),
         "balance" => json!({"address":address,"balance":wallet.balance().await?}),
-        "send" => {
+        "quote" | "send" => {
             let recipient = args.get(1).context("send requires recipient and atomic amount")?;
             let amount: u64 = args.get(2).context("send requires atomic amount")?.parse()?;
-            let quote = wallet.quote_transfer(recipient.clone(), amount, UsdtDestination::Arbitrum).await?;
+            let destination = args.get(3).map(|s| serde_json::from_value::<UsdtDestination>(json!(s))).transpose()?.unwrap_or(UsdtDestination::Arbitrum);
+            let quote = wallet.quote_transfer(recipient.clone(), amount, destination).await?;
+            if command == "quote" {
+                println!("{}", serde_json::to_string_pretty(&quote)?);
+                return Ok(());
+            }
             let transfer = wallet.send(quote.id.clone(), MNEMONIC.into(), passphrase.clone()).await?;
             json!({"quote":quote,"transfer":transfer})
         }
@@ -73,6 +78,31 @@ async fn main() -> Result<()> {
             json!(wallet.refresh_transfers().await?.into_iter().find(|transfer| transfer.id == *id))
         }
         "history" => json!(wallet.history()?),
+        "deposit" => {
+            let client = UsdtDepositClient::new(address, format!("{GATEWAY}/deposits"))?;
+            match args.get(1).map(String::as_str) {
+                Some("receive") => {
+                    let network: UsdtDepositNetwork = serde_json::from_value(json!(args.get(2).context("receive requires network")?))?;
+                    let amount = args.get(3).context("receive requires atomic amount")?.parse()?;
+                    let result = client.receive(network, amount, MNEMONIC.into(), passphrase).await?;
+                    json!({"address":result.address,"recipient":result.recipient,"amount":result.amount,"estimated_received":result.estimated_received,"uri":result.uri})
+                }
+                Some("history") => {
+                    let page = client.history(0, MNEMONIC.into(), passphrase).await?;
+                    json!({"deposits": page.deposits.into_iter().map(|d|json!({"id":d.id,"status":d.status,"amount":d.amount,"refund_tx":d.refund_tx})).collect::<Vec<_>>(),"next_offset":page.next_offset})
+                }
+                Some("detail") => {
+                    let d = client.detail(args.get(2).context("detail requires ID")?.clone(), 0, MNEMONIC.into(), passphrase).await?;
+                    json!({"id":d.deposit.id,"status":d.deposit.status,"order":d.order.map(|o|json!({"status":o.status,"amount_out":o.amount_out,"destination_tx":o.destination_tx,"refund_tx":o.refund_tx}))})
+                }
+                Some("refund") => {
+                    let network: UsdtDepositNetwork = serde_json::from_value(json!(args.get(4).context("refund requires network")?))?;
+                    client.request_refund(args.get(2).context("refund requires ID")?.clone(), 0, args.get(3).context("refund requires address")?.clone(), network, MNEMONIC.into(), passphrase).await?;
+                    json!({"status":"refund_requested"})
+                }
+                _ => bail!("deposit receive NETWORK ATOMIC_AMOUNT | history | detail ID | refund ID ADDRESS NETWORK"),
+            }
+        }
         "proof" => {
             let id = args.get(1).context("proof requires transfer ID and binding file")?;
             let binding = load(args.get(2).context("proof requires binding file")?)?;
@@ -89,7 +119,7 @@ async fn main() -> Result<()> {
             }).await?;
             verified.map(|p| json!({"payment_id":p.payment_id,"transfer_id":p.transfer_id,"sender":p.sender,"recipient":p.recipient,"amount":p.amount,"timestamp":p.timestamp})).unwrap_or(Value::Null)
         }
-        _ => bail!("use address, balance, send RECIPIENT ATOMIC_AMOUNT, refresh ID, history, proof ID BINDING_FILE, or verify BINDING_FILE PROOF_FILE"),
+        _ => bail!("use address, balance, quote/send RECIPIENT ATOMIC_AMOUNT [Destination], deposit, refresh ID, history, proof ID BINDING_FILE, or verify BINDING_FILE PROOF_FILE"),
     };
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())

@@ -11,13 +11,18 @@ Run the shared Arbitrum fork, Alto and gateway without spending mainnet funds:
 USDT_TEST_ENV_FILE=/absolute/path/to/private.env ./usdt-fixture run
 # In another terminal:
 ./usdt-fixture smoke
+./usdt-fixture bridge-smoke
 eval "$(./usdt-fixture env)"
 ./usdt-fixture fund 0xYOUR_TEST_WALLET 10
 ```
 
 The private file contains `ARBITRUM_RPC_URL=https://...` with historical-state access.
 Requires Node 22.23.1+, Rust, Git and tar. Keep existing staging VSS, Pubky and rate
-services. See [USDT fixture](docs/usdt-fixture.md) for versions, app setup, pending
+services. The stack also starts local Orchestra and LayerZero providers. After the
+app registers a bridge receive address, use `./usdt-fixture orchestra deposit
+ADDRESS polygon 3.5`, then `./usdt-fixture orchestra advance DEPOSIT_ID completed`
+to deliver local tokens. `orchestra list` shows outgoing quotes; `layerzero
+SOURCE_TX DELIVERED` updates a real USDT0 source message. See [USDT fixture](docs/usdt-fixture.md) for versions, app setup, pending
 payment controls, proof verification, the optional Shop overlay and simulation limits.
 
 

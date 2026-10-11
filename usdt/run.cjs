@@ -22,6 +22,10 @@ const {
 } = require('./contracts.cjs');
 const { state } = require('./setup.cjs');
 const pins = require('./pins.json');
+const { serveProvider } = require('./bridge-http.cjs');
+const { OrchestraFixture } = require('./orchestra.cjs');
+const { LayerZeroFixture } = require('./layerzero.cjs');
+const { sourceNetworks, bridgeNetworks } = require('./bridge-assets.cjs');
 const ports = {
   node: 23450,
   alto: 23451,
@@ -29,6 +33,8 @@ const ports = {
   gateway: 23453,
   control: 23454,
   upstream: 23455,
+  orchestra: 23456,
+  layerzero: 23457,
 };
 const urls = Object.fromEntries(
   Object.entries(ports).map(([name, port]) => [name, `http://127.0.0.1:${port}`]),
@@ -178,6 +184,10 @@ async function run() {
         return rpc(urls.alto, method, params);
       }),
     );
+    const orchestra = new OrchestraFixture(urls.node);
+    const layerzero = new LayerZeroFixture(urls.node);
+    servers.push(await serveProvider(ports.orchestra, orchestra, 'local-orchestra-fixture'));
+    servers.push(await serveProvider(ports.layerzero, layerzero));
     const service = path.join(state, 'service');
     child('gateway', process.execPath, [path.join(service, 'dist/index.js')], {
       NODE_ENV: 'test',
@@ -186,11 +196,13 @@ async function run() {
       ARBITRUM_RPC_URL: urls.node,
       LOCAL_PROVIDER_URL: urls.provider,
       PIMLICO_API_KEY: '',
-      ORCHESTRA_API_KEY: '',
-      ORCHESTRA_BRIDGE_SECRET: '',
-      ORCHESTRA_BRIDGE_NETWORKS: '',
-      ORCHESTRA_DEPOSIT_NETWORKS: '',
-      USDT_BRIDGE_NETWORKS: '',
+      LOCAL_ORCHESTRA_URL: urls.orchestra,
+      LOCAL_LAYERZERO_URL: urls.layerzero,
+      ORCHESTRA_API_KEY: 'local-orchestra-fixture',
+      ORCHESTRA_BRIDGE_SECRET: 'ab'.repeat(32),
+      ORCHESTRA_BRIDGE_NETWORKS: bridgeNetworks.join(','),
+      ORCHESTRA_DEPOSIT_NETWORKS: sourceNetworks.join(','),
+      USDT_BRIDGE_NETWORKS: 'ethereum,polygon,plasma,stable',
       REQUESTS_PER_MINUTE: '10000',
       GLOBAL_REQUESTS_PER_MINUTE: '100000',
     });
@@ -216,6 +228,12 @@ async function run() {
             return (await balance(urls.node, params[0])).toString();
           case 'fund':
             return transfer(urls.node, params[0], atomicAmount(params[1]));
+          case 'orchestra':
+            return orchestra.control(params);
+          case 'layerzero':
+            return layerzero.set(...params);
+          case 'layerzero-mode':
+            return layerzero.setMode(params[0]);
           case 'mine': {
             const count = Number(params[0] ?? 3);
             if (!Number.isInteger(count) || count < 1 || count > 1000)
@@ -239,6 +257,8 @@ async function run() {
             await rpc(urls.node, 'evm_setNextBlockTimestamp', [Math.floor(Date.now() / 1000)]);
             await rpc(urls.node, 'anvil_mine', [1]);
             snapshot = await rpc(urls.node, 'evm_snapshot');
+            orchestra.reset();
+            layerzero.reset();
             mode = 'healthy';
             await rpc(urls.alto, 'debug_bundler_setBundlingMode', ['auto']);
             return true;
