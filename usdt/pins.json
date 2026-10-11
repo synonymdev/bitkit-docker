@@ -1,0 +1,12 @@
+{
+  "forkBlock": 513660679,
+  "anvil": "1.8.5",
+  "anvilHashes": {
+    "darwin_arm64": "56049728e25e44a61c7f2e49438023b0890cb45850ffcb7c882f90cd998baf83",
+    "darwin_amd64": "b919f69bb4231ad68beaaba9dc8f7d36d9d552cef1a76a8bf69c2bdfd974339a",
+    "linux_arm64": "5bdce3dade8b6f0a65d4fccf6908426aee4905a988b08dce79d0a72fe7498310",
+    "linux_amd64": "6c66ffcc55fa4249197721baa3098bc208014ea1d8aa04b2ed50ac6bccffb226"
+  },
+  "service": "766bb4977fa6a103dc39f34910323fea1b07d82a",
+  "core": "bdce512c9d1025ba6cd71baa8c2df1a39dcb3d02"
+}

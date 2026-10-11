@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Add local Orchestra and LayerZero providers with bridge lifecycle controls, real Arbitrum credits/refunds and a Core bridge smoke suite
+- Add an isolated Arbitrum/Alto USDT fixture with a real Core payment/proof smoke test, controlled paymaster failures and optional Shop USDT verification wiring
 - Run the Shop's marketplace on Synonym's staging with our own Paykit Server v0.1.0-rc11 behind a Cloudflare quick tunnel (`./shop-mixed`, profile `shop-mixed`)
 - Run a paid Shop order on our own Paykit Server, Lock Server, marketplace service and Shop with Synonym's staging homeserver (`./shop-order`, profile `shop-order`)
 - Rebuild the Paykit fixtures on the paykit-rs version a Bitkit pull request pins with `scripts/follow-app-paykit`

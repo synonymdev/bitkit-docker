@@ -7,6 +7,10 @@ CLI_NAME="$(basename "$0")"
 cd "$(dirname "$0")"
 
 # The commits the Android and iOS order-paid acceptance ran on (10 Oct). Another revision is refused unless set here on purpose.
+if [ "${SHOP_ORDER_USDT:-0}" = 1 ]; then
+  # USDT access decisions require the per-rail verifier.
+  export SHOP_ORDER_LOCKS_REV=15b81eb0c25f693124d2d3ea956586f407170a63
+fi
 LOCKS_REPO=https://github.com/pubky/locks.git
 LOCKS_REV=${SHOP_ORDER_LOCKS_REV:-01cfeca14c7b5d385d8c3536c0cb4e1af81b458c} # v0.1.0-rc10
 SERVICE_REPO=https://github.com/pubky/pubky-marketplace-service.git
@@ -18,7 +22,11 @@ export SHOP_ORDER_LOCKS_REV=$LOCKS_REV SHOP_ORDER_SERVICE_REV=$SERVICE_REV SHOP_
 # Its own compose project, never a QA lane's (a lane's cleanup removes that lane's project), whatever COMPOSE_PROJECT_NAME says.
 PROJECT=${SHOP_ORDER_PROJECT:-shop-order}
 COMPOSE=(docker compose --project-name "$PROJECT" --profile shop-order)
+if [ "${SHOP_ORDER_USDT:-0}" = 1 ]; then
+  COMPOSE+=(-f docker-compose.yml -f usdt/shop-compose.yml)
+fi
 BASE=(shop-mixed-postgres shop-mixed-driver shop-mixed-paykit shop-mixed-tunnel)
+if [ "${SHOP_ORDER_USDT:-0}" = 1 ]; then BASE+=(usdt-shop-rpc); fi
 TUNNELS=(shop-order-locks-tunnel shop-order-service-tunnel shop-order-shop-tunnel)
 APPS=(shop-order-postgres shop-order-locks shop-order-service shop-order-shop)
 
