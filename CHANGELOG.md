@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Issue payment requests payable through an LNURL-pay endpoint, with a separate proposal expiry
 
 ### Changed
+- Pin the local USDT gateway to `3d8c0b6`, including sanitized configuration errors and local LayerZero tracking support
 - Publish every host port at 1024 or above, in the 23000-23999 range for the services Bitkit does not dial by a fixed number (README "Ports" lists them)
 - Move the payment request fixture peers to paykit-rs rc65 on Pubky 0.14.0, the SDK current Bitkit builds pin (the `fixture-issuer` and `rc56-peer` service names stay)
 - Move the marketplace fixture to the Pubky 0.14.0 homeserver, which grants the `LOCK` write locks current Bitkit builds take, with Paykit Server `0ffd4da` (pubky/paykit-server#46, paykit-rs rc65, locks-core rc8) and the driver on `@synonymdev/pubky` 0.14.0
