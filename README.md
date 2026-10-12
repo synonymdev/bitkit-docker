@@ -46,6 +46,38 @@ delivery remains simulated; live destination settlement needs separate acceptanc
 
 ## Services
 
+### iOS driver preflight
+
+`scripts/ios_touch.py` avoids the driver's tap translation path. It waits up to
+30 seconds for a unique enabled identifier, sends one touch using the new
+snapshot reference, and waits for a settled snapshot before returning. It never
+repeats an input after a capture failure. Use it one control at a time across
+navigation; an ambiguous identifier or failed wait exits without another touch.
+
+Build the independent SwiftUI scene-based probe on the coordinator or lane:
+
+```sh
+python3 -m unittest discover -s scripts -p test_ios_touch.py
+python3 ios-driver-probe/build.py
+```
+
+Only on the test run's lane, use its own booted simulator and show it in the
+standalone Simulator.app. Do not run these device steps on the coordinator:
+
+```sh
+xcrun simctl install "$QA_SIMULATOR_UDID" .ios-driver-probe/DriverProbe.app
+xcrun simctl launch "$QA_SIMULATOR_UDID" dev.bitkit.qa.driver-probe
+open -a Simulator --args -CurrentDeviceUDID "$QA_SIMULATOR_UDID"
+python3 scripts/ios_touch.py --simulator "$QA_SIMULATOR_UDID" --identifier ProbeTap
+xcodebuildmcp ui-automation wait-for-ui --simulator-id "$QA_SIMULATOR_UDID" \
+  --identifier ProbeCount --predicate textContains --text 'Touches: 1' --timeout-ms 30000
+```
+
+Keep the resulting snapshot as driver evidence. A failed preflight requires a
+lane-owned simulator/driver repair before app journeys. No app QA item is run by
+the probe. Coordinator verification compiles the probe and tests the helper;
+the lane's install steps establish actual device behavior.
+
 - **Bitcoin Core** (regtest): Bitcoin node for development
 - **LND**: Lightning Network Daemon for Lightning payments
 - **Electrum Server**: For Bitcoin blockchain queries
