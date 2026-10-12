@@ -1,4 +1,4 @@
-//! Disposable rc65 Paykit peer for Bitkit regtest journeys.
+//! Disposable rc74 Paykit peer for Bitkit regtest journeys.
 //! Two Compose services run this binary with separate identities and receiver paths.
 #![recursion_limit = "512"]
 
@@ -19,10 +19,10 @@ use paykit_lib::{
     PaymentRequestId, PaymentRequestTerms, Recurrence, RecurrenceConfig, RecurrenceUnit,
 };
 use paykit_sdk::{
-    PubkySharedStateStorage, StorageAdapter, LinkedPeerState, PaykitAppCapabilities, PaykitAppId, PaykitApp, PaykitSdk,
-    PaykitSdkConfig, PaymentAdapter, PaymentRequestLifecycleState, PubkyLocalSecretKey,
-    PubkyPublicKey, PubkySessionAccess, PubkySessionBootstrap, PubkySessionProvider,
-    PAYKIT_AUTHORIZER_SESSION_CAPABILITIES,
+    LinkedPeerState, PaykitApp, PaykitAppCapabilities, PaykitAppId, PaykitSdk, PaykitSdkConfig,
+    PaymentAdapter, PaymentRequestLifecycleState, PubkyLocalSecretKey, PubkyPublicKey,
+    PubkySessionAccess, PubkySessionBootstrap, PubkySessionProvider, PubkySharedStateStorage,
+    StorageAdapter, PAYKIT_AUTHORIZER_SESSION_CAPABILITIES,
 };
 use pubky::{Keypair, Pubky};
 use serde::Deserialize;
@@ -91,7 +91,10 @@ impl App {
             payload: json!({ "value": self.address }).to_string(),
         }];
         if let Some(lnurl) = self.lnurl.lock().unwrap().clone() {
-            details.push(paykit_sdk::PrivateReceivingDetail { identifier: LNURL_ENDPOINT.into(), payload: json!({ "value": lnurl }).to_string() });
+            details.push(paykit_sdk::PrivateReceivingDetail {
+                identifier: LNURL_ENDPOINT.into(),
+                payload: json!({ "value": lnurl }).to_string(),
+            });
         }
         details
     }
@@ -100,7 +103,9 @@ impl App {
 #[derive(Deserialize)]
 struct Peer {
     peer_pubky: String,
-    peer_path: String,
+    // Kept in the HTTP contract; rc74 links are identity-wide.
+    #[serde(rename = "peer_path")]
+    _peer_path: String,
 }
 
 impl Peer {
@@ -143,6 +148,8 @@ struct RecordInput {
     #[serde(flatten)]
     peer: Peer,
     payment_request_id: String,
+    // Optional for normal fixture preparation; supply the reviewed ID to probe stale approval.
+    expected_proposal_stream_item_id: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -224,7 +231,9 @@ where
                 eprintln!("setup: {what} failed, retrying: {error:#}");
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
-            Err(error) => return Err(error.context(format!("{what} still failing after {timeout}s"))),
+            Err(error) => {
+                return Err(error.context(format!("{what} still failing after {timeout}s")))
+            }
         }
     }
 }
@@ -232,8 +241,13 @@ where
 async fn setup() -> Result<App> {
     let role = env::var("FIXTURE_ROLE").context("FIXTURE_ROLE is required")?;
     // the issuer contract of the Bitkit journeys: the fixture issuer's App ID is `paykit-server`
-    let default_app_id = if role == "fixture-issuer" { "paykit-server" } else { "qa-fixture" };
-    let receiver_path = PaykitAppId::new(env::var("APP_ID").unwrap_or_else(|_| default_app_id.into()))?;
+    let default_app_id = if role == "fixture-issuer" {
+        "paykit-server"
+    } else {
+        "qa-fixture"
+    };
+    let receiver_path =
+        PaykitAppId::new(env::var("APP_ID").unwrap_or_else(|_| default_app_id.into()))?;
     let pubky = Pubky::testnet()?;
     let bootstrap = PubkySessionBootstrap::with_pubky(pubky, "bitkit-docker.fixture")?
         .with_auth_relay("http://localhost:15412/inbox")?;
@@ -242,8 +256,16 @@ async fn setup() -> Result<App> {
     // A new identity per attempt: a failed sign-up must not leave the retry with a half-created account.
     let signed_up = retry("sign-up on the local homeserver", || async {
         let phrase_file = env::var("MNEMONIC_FILE").ok();
-        let secret = if let Some(ref file) = phrase_file { PubkyLocalSecretKey::from_bip39_mnemonic(std::fs::read_to_string(file)?.trim())? } else { PubkyLocalSecretKey::new(Keypair::random().secret_key()) };
-        if phrase_file.is_some() { return Ok(bootstrap.sign_in(&secret, PAYKIT_AUTHORIZER_SESSION_CAPABILITIES).await?); }
+        let secret = if let Some(ref file) = phrase_file {
+            PubkyLocalSecretKey::from_bip39_mnemonic(std::fs::read_to_string(file)?.trim())?
+        } else {
+            PubkyLocalSecretKey::new(Keypair::random().secret_key())
+        };
+        if phrase_file.is_some() {
+            return Ok(bootstrap
+                .sign_in(&secret, PAYKIT_AUTHORIZER_SESSION_CAPABILITIES)
+                .await?);
+        }
         Ok(bootstrap
             .sign_up(
                 &secret,
@@ -254,29 +276,32 @@ async fn setup() -> Result<App> {
             .await?)
     })
     .await?;
+    if let Ok(expected) = env::var("EXPECTED_PUBKY") {
+        if signed_up.public_key != PubkyPublicKey::from_raw_or_app_key(&expected)? {
+            bail!("imported disposable identity does not match EXPECTED_PUBKY");
+        }
+    }
     let provider = SessionProvider(Arc::new(Mutex::new(Some(signed_up.access))));
     let storage = PubkySharedStateStorage::new(provider.clone());
-    let sdk = PaykitSdk::new(
-        storage.clone(),
-        provider,
-        FixturePaymentAdapter,
-        config,
-    );
+    let sdk = PaykitSdk::new(storage.clone(), provider, FixturePaymentAdapter, config);
     sdk.initialize().await?;
     let imported = env::var("MNEMONIC_FILE").is_ok();
     if !imported {
-    sdk.publish_paykit_noise_key_authorization().await?;
-    retry("receiver marker publication", || async {
-        Ok(sdk
-            .publish_paykit_app(PaykitApp::new("QA Fixture", PaykitAppCapabilities {
-                private_payments: true,
-                payment_requests: true,
-                receipts: false,
-                outgoing_payments: role == "rc56-peer",
-            })?)
-            .await?)
-    })
-    .await?;
+        sdk.publish_paykit_noise_key_authorization().await?;
+        retry("receiver marker publication", || async {
+            Ok(sdk
+                .publish_paykit_app(PaykitApp::new(
+                    "QA Fixture",
+                    PaykitAppCapabilities {
+                        private_payments: true,
+                        payment_requests: true,
+                        receipts: false,
+                        outgoing_payments: role == "rc56-peer",
+                    },
+                )?)
+                .await?)
+        })
+        .await?;
     }
     let address = retry("getnewaddress from bitcoind", || async {
         let address = rpc("getnewaddress", json!(["", "bech32"]))
@@ -292,19 +317,21 @@ async fn setup() -> Result<App> {
     .await?;
     let endpoint_payload = json!({ "value": address }).to_string();
     if !imported {
-    retry("Paykit endpoint publication", || async {
-        let published = sdk
-            .sync_public_endpoints_with_receiving_details(vec![paykit_sdk::PublicReceivingDetail {
-                identifier: ENDPOINT.into(),
-                payload: endpoint_payload.clone(),
-            }])
-            .await?;
-        if !published.failed.is_empty() || published.published.len() != 1 {
-            bail!("Paykit endpoint publication failed");
-        }
-        Ok(())
-    })
-    .await?;
+        retry("Paykit endpoint publication", || async {
+            let published = sdk
+                .sync_public_endpoints_with_receiving_details(vec![
+                    paykit_sdk::PublicReceivingDetail {
+                        identifier: ENDPOINT.into(),
+                        payload: endpoint_payload.clone(),
+                    },
+                ])
+                .await?;
+            if !published.failed.is_empty() || published.published.len() != 1 {
+                bail!("Paykit endpoint publication failed");
+            }
+            Ok(())
+        })
+        .await?;
     }
     Ok(App {
         sdk,
@@ -320,10 +347,15 @@ async fn setup() -> Result<App> {
 }
 
 async fn info(State(app): State<Arc<App>>) -> ApiResult {
+    // The Dockerfile can follow an app's SDK pin; report what the image actually built.
+    let sdk_revision = std::fs::read_to_string("/usr/local/share/paykit-rs-rev")
+        .unwrap_or_else(|_| "03d4f05721e92d3944cb4d5af4b2c98c4390a5a8".into());
     Ok(Json(json!({
         "status": "ready", "role": app.role, "pubky": app.pubky.to_app_key(),
         "receiver_path": app.receiver_path.as_str(), "endpoint": ENDPOINT,
         "address": app.address, "lnurl": app.lnurl.lock().unwrap().clone(),
+        "paykit_rs_rev": sdk_revision.trim(),
+        "controls": ["replace", "forget", "reset-link"],
     })))
 }
 
@@ -351,10 +383,7 @@ async fn sync_locked(app: &App, peer: PubkyPublicKey) -> Result<Value> {
     if state != LinkedPeerState::Linked {
         bail!("peer link is {state:?}");
     }
-    let received = app
-        .sdk
-        .receive_private_messages(peer.clone())
-        .await?;
+    let received = app.sdk.receive_private_messages(peer.clone()).await?;
     let sent = app
         .sdk
         .process_outbound_private_messages(peer.clone())
@@ -391,7 +420,11 @@ async fn issue(State(app): State<Arc<App>>, Json(input): Json<RequestInput>) -> 
             "btc",
         )?,
         PaymentReference::new(input.reference)?,
-        vec![PaymentEndpointIdentifier::new(if input.lnurl.is_some() { LNURL_ENDPOINT } else { ENDPOINT })?],
+        vec![PaymentEndpointIdentifier::new(if input.lnurl.is_some() {
+            LNURL_ENDPOINT
+        } else {
+            ENDPOINT
+        })?],
     )
     .proposal_expires_at(input.proposal_expires_at);
     if let Some(lnurl) = input.lnurl {
@@ -429,7 +462,10 @@ async fn issue(State(app): State<Arc<App>>, Json(input): Json<RequestInput>) -> 
     // While `/endpoints` withholds them, the list goes out empty: the request names an endpoint the app cannot resolve.
     let withheld = *app.withheld.lock().await;
     app.sdk
-        .enqueue_private_payment_list_with_receiving_details(peer.clone(), app.private_details(withheld))
+        .enqueue_private_payment_list_with_receiving_details(
+            peer.clone(),
+            app.private_details(withheld),
+        )
         .await?;
     let mut record = app
         .sdk
@@ -451,16 +487,17 @@ async fn issue(State(app): State<Arc<App>>, Json(input): Json<RequestInput>) -> 
                         context: "fixture proposal not queued".into(),
                         source: None,
                     })?;
-                message.raw_json = message.raw_json.replace(&generated, &replacement);
+                message.raw_json = rename_request(&message.raw_json, &generated, &replacement)
+                    .map_err(|error| paykit_sdk::PaykitSdkError::Protocol {
+                        context: error.to_string(),
+                        source: None,
+                    })?;
                 tx.save_outbound_private_message(message)
             })
             .await?;
         record.payment_request_id = fixed;
     }
-    let sent = app
-        .sdk
-        .process_outbound_private_messages(peer)
-        .await?;
+    let sent = app.sdk.process_outbound_private_messages(peer).await?;
     if !sent.failed.is_empty() || sent.sent.len() < 2 {
         return Err(anyhow!(
             "Payment Request delivery failed: {} failed, {} sent (the private payment list and the request)",
@@ -476,6 +513,104 @@ async fn issue(State(app): State<Arc<App>>, Json(input): Json<RequestInput>) -> 
     ))
 }
 
+// Change the protocol field only: a reference or metadata may contain the generated UUID too.
+fn rename_request(raw: &str, expected: &str, replacement: &str) -> Result<String> {
+    PaymentRequestId::new(replacement.to_owned())?;
+    let mut value: Value = serde_json::from_str(raw)?;
+    if value["payment_request_id"] != expected {
+        bail!("queued proposal has another Payment Request ID");
+    }
+    value["payment_request_id"] = json!(replacement);
+    Ok(serde_json::to_string(&value)?)
+}
+
+/// Resend the original terms under the same request ID with a new Event ID.
+/// The receiver must forget the old peer history first, or the SDK records a conflict.
+async fn replace(State(app): State<Arc<App>>, Json(input): Json<RecordInput>) -> ApiResult {
+    let _guard = app.operation.lock().await;
+    let peer = input.peer.parsed()?;
+    let id = PaymentRequestId::new(input.payment_request_id)?;
+    let original = app
+        .storage
+        .transaction(|tx| {
+            Ok(tx
+                .outbound_private_messages(&peer)
+                .into_iter()
+                .find(|message| {
+                    message.kind == "paykit.payment_request"
+                        && serde_json::from_str::<Value>(&message.raw_json)
+                            .is_ok_and(|value| value["payment_request_id"] == id.as_str())
+                }))
+        })
+        .await?
+        .context("unknown issued Payment Request")?;
+    let message = paykit_lib::PrivateApplicationMessage {
+        version: Some(1),
+        kind: Some(original.kind),
+        app_id: Some(original.app_id.as_str().to_owned()),
+        raw_json: original.raw_json,
+    };
+    let parsed = paykit_lib::parse_payment_request_event_message(&message)
+        .context("original is not a Payment Request")?;
+    let Some(paykit_lib::PaymentRequestEvent::Request(request)) = parsed.parsed_event() else {
+        return Err(anyhow!("original proposal is invalid").into());
+    };
+    let terms = request.request().clone();
+    let original_event = request.event_id().as_str().to_owned();
+    let queued = app.sdk.propose_payment_request(peer.clone(), terms).await?;
+    let generated = queued.payment_request_id;
+    let replacement = id.as_str().to_owned();
+    app.storage
+        .transaction(|tx| {
+            let mut message = tx
+                .queued_outbound_private_messages(&peer)
+                .into_iter()
+                .find(|message| {
+                    serde_json::from_str::<Value>(&message.raw_json)
+                        .is_ok_and(|value| value["payment_request_id"] == generated)
+                })
+                .ok_or_else(|| paykit_sdk::PaykitSdkError::Protocol {
+                    context: "replacement not queued".into(),
+                    source: None,
+                })?;
+            message.raw_json = rename_request(&message.raw_json, &generated, &replacement)
+                .map_err(|error| paykit_sdk::PaykitSdkError::Protocol {
+                    context: error.to_string(),
+                    source: None,
+                })?;
+            tx.save_outbound_private_message(message)
+        })
+        .await?;
+    let sent = app.sdk.process_outbound_private_messages(peer).await?;
+    if !sent.failed.is_empty() || sent.sent.is_empty() {
+        return Err(anyhow!("replacement delivery failed").into());
+    }
+    Ok(Json(json!({ "payment_request_id": id.as_str(),
+        "original_event_id": original_event, "replacement_event_id": queued.proposal_event_id,
+        "sent": sent.sent.len() })))
+}
+
+/// Controlled reset through the SDK's public API, preserving monotonic stream IDs.
+/// An imported disposable app identity can use this while its review sheet remains open.
+async fn forget(State(app): State<Arc<App>>, Json(input): Json<Peer>) -> ApiResult {
+    let _guard = app.operation.lock().await;
+    let peer = input.parsed()?;
+    app.sdk.block_peer(peer.clone()).await?;
+    app.sdk.forget_peer(peer.clone()).await?;
+    let record = app.sdk.unblock_peer(peer).await?;
+    Ok(Json(serde_json::to_value(record)?))
+}
+
+/// Drop only the transport link on the issuer before a fresh handshake.
+/// Its original proposal and delivery confirmation stay in shared history.
+async fn reset_link(State(app): State<Arc<App>>, Json(input): Json<Peer>) -> ApiResult {
+    let _guard = app.operation.lock().await;
+    let peer = input.parsed()?;
+    app.sdk.block_peer(peer.clone()).await?;
+    let record = app.sdk.unblock_peer(peer).await?;
+    Ok(Json(serde_json::to_value(record)?))
+}
+
 async fn records(State(app): State<Arc<App>>, Json(input): Json<Peer>) -> ApiResult {
     let _guard = app.operation.lock().await;
     let peer = input.parsed()?;
@@ -487,16 +622,26 @@ async fn records(State(app): State<Arc<App>>, Json(input): Json<Peer>) -> ApiRes
 async fn act(State(app): State<Arc<App>>, action: &'static str, input: RecordInput) -> ApiResult {
     let _guard = app.operation.lock().await;
     let peer = input.peer.parsed()?;
-    let _ = app
-        .sdk
-        .receive_private_messages(peer.clone())
-        .await?;
+    let _ = app.sdk.receive_private_messages(peer.clone()).await?;
     let id = PaymentRequestId::new(input.payment_request_id)?;
     let record = match action {
         "accept" => {
-            app.sdk.claim_payment_request_for_execution(peer.clone(), &id).await?;
+            let reviewed = match input.expected_proposal_stream_item_id {
+                Some(id) => id,
+                None => app
+                    .sdk
+                    .payment_requests_with(&peer)
+                    .await?
+                    .into_iter()
+                    .find(|record| record.payment_request_id == id.as_str())
+                    .and_then(|record| record.proposal_stream_item_id)
+                    .context("request has no proposal stream item ID")?,
+            };
             app.sdk
-                .accept_payment_request(peer.clone(), &id)
+                .claim_payment_request_for_execution(peer.clone(), &id)
+                .await?;
+            app.sdk
+                .accept_payment_request(peer.clone(), &id, reviewed)
                 .await?
         }
         "reject" => {
@@ -505,17 +650,16 @@ async fn act(State(app): State<Arc<App>>, action: &'static str, input: RecordInp
                 .await?
         }
         "cancel" => {
-            app.sdk.claim_payment_request_for_execution(peer.clone(), &id).await?;
+            app.sdk
+                .claim_payment_request_for_execution(peer.clone(), &id)
+                .await?;
             app.sdk
                 .cancel_payment_request(peer.clone(), &id, None)
                 .await?
         }
         _ => unreachable!(),
     };
-    let sent = app
-        .sdk
-        .process_outbound_private_messages(peer)
-        .await?;
+    let sent = app.sdk.process_outbound_private_messages(peer).await?;
     if !sent.failed.is_empty() || sent.sent.len() != 1 {
         return Err(anyhow!("{action} delivery failed").into());
     }
@@ -538,10 +682,7 @@ async fn pay_impl(app: Arc<App>, input: PayInput, existing_tx: bool) -> ApiResul
     let _guard = app.operation.lock().await;
     let peer = input.record.peer.parsed()?;
     let id = PaymentRequestId::new(input.record.payment_request_id)?;
-    let _ = app
-        .sdk
-        .receive_private_messages(peer.clone())
-        .await?;
+    let _ = app.sdk.receive_private_messages(peer.clone()).await?;
     let record = app
         .sdk
         .payment_requests_with(&peer)
@@ -647,10 +788,19 @@ async fn proof(State(app): State<Arc<App>>, Json(input): Json<PayInput>) -> ApiR
 }
 
 async fn withdraw(State(app): State<Arc<App>>, Json(input): Json<Peer>) -> ApiResult {
- let _guard = app.operation.lock().await;
- let peer = input.parsed()?;
- let report = app.sdk.sync_private_payment_lists_with_reservations_and_process_outbound(vec![paykit_sdk::PrivatePaymentListReservationUpdate {counterparty: peer, reservations: vec![]}], false).await?;
- Ok(Json(serde_json::to_value(report)?))
+    let _guard = app.operation.lock().await;
+    let peer = input.parsed()?;
+    let report = app
+        .sdk
+        .sync_private_payment_lists_with_reservations_and_process_outbound(
+            vec![paykit_sdk::PrivatePaymentListReservationUpdate {
+                counterparty: peer,
+                reservations: vec![],
+            }],
+            false,
+        )
+        .await?;
+    Ok(Json(serde_json::to_value(report)?))
 }
 
 #[derive(Deserialize)]
@@ -663,7 +813,9 @@ struct EndpointsInput {
 }
 
 async fn endpoints_state(State(app): State<Arc<App>>) -> ApiResult {
-    Ok(Json(json!({ "withheld": *app.withheld.lock().await, "endpoint": ENDPOINT })))
+    Ok(Json(
+        json!({ "withheld": *app.withheld.lock().await, "endpoint": ENDPOINT }),
+    ))
 }
 
 /// Withholds or restores the issuer's payment endpoints: its public endpoint and, for the named peer, its private payment list.
@@ -678,20 +830,35 @@ async fn endpoints(State(app): State<Arc<App>>, Json(input): Json<EndpointsInput
     let public: Vec<paykit_sdk::PublicReceivingDetail> = app
         .private_details(withheld)
         .into_iter()
-        .map(|detail| paykit_sdk::PublicReceivingDetail { identifier: detail.identifier, payload: detail.payload })
+        .map(|detail| paykit_sdk::PublicReceivingDetail {
+            identifier: detail.identifier,
+            payload: detail.payload,
+        })
         .collect();
-    let published = app.sdk.sync_public_endpoints_with_receiving_details(public).await?;
+    let published = app
+        .sdk
+        .sync_public_endpoints_with_receiving_details(public)
+        .await?;
     let mut private = Value::Null;
     if let Some(peer) = input.peer {
         let peer = peer.parsed()?;
         app.sdk
-            .enqueue_private_payment_list_with_receiving_details(peer.clone(), app.private_details(withheld))
+            .enqueue_private_payment_list_with_receiving_details(
+                peer.clone(),
+                app.private_details(withheld),
+            )
             .await?;
         let sent = app.sdk.process_outbound_private_messages(peer).await?;
         if !sent.failed.is_empty() || sent.sent.is_empty() {
-            return Err(anyhow!("private payment list delivery failed: {} failed, {} sent", sent.failed.len(), sent.sent.len()).into());
+            return Err(anyhow!(
+                "private payment list delivery failed: {} failed, {} sent",
+                sent.failed.len(),
+                sent.sent.len()
+            )
+            .into());
         }
-        private = json!({ "sent": sent.sent.len(), "entries": app.private_details(withheld).len() });
+        private =
+            json!({ "sent": sent.sent.len(), "entries": app.private_details(withheld).len() });
     }
     Ok(Json(json!({
         "withheld": withheld,
@@ -723,7 +890,9 @@ async fn publish_key_authorization() -> Result<()> {
     let secret = PubkyLocalSecretKey::new(bytes);
     let bootstrap = PubkySessionBootstrap::with_pubky(Pubky::testnet()?, "bitkit-docker.fixture")?
         .with_auth_relay("http://localhost:15412/inbox")?;
-    let signed_in = bootstrap.sign_in(&secret, PAYKIT_AUTHORIZER_SESSION_CAPABILITIES).await?;
+    let signed_in = bootstrap
+        .sign_in(&secret, PAYKIT_AUTHORIZER_SESSION_CAPABILITIES)
+        .await?;
     let pubky = signed_in.public_key.to_app_key();
     let provider = SessionProvider(Arc::new(Mutex::new(Some(signed_in.access))));
     let sdk = PaykitSdk::new(
@@ -744,7 +913,49 @@ async fn main() -> Result<()> {
     if invoked.ends_with("paykit-key-authorization") {
         return publish_key_authorization().await;
     }
+    if env::args().nth(1).as_deref() == Some("--health") {
+        let port = env::var("FIXTURE_PORT").unwrap_or_else(|_| "3002".into());
+        reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await?
+            .error_for_status()?;
+        return Ok(());
+    }
+    let control = env::args().nth(1).as_deref() == Some("--control");
+    if control && (env::var("MNEMONIC_FILE").is_err() || env::var("EXPECTED_PUBKY").is_err()) {
+        bail!("--control requires MNEMONIC_FILE and EXPECTED_PUBKY for a disposable identity");
+    }
     let app = Arc::new(setup().await?);
+    if control {
+        let mut body = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
+        let peer: Peer = serde_json::from_str(&body)?;
+        let result = match env::args().nth(2).as_deref() {
+            Some("forget") => forget(State(app.clone()), Json(peer)).await,
+            Some("reset-link") => reset_link(State(app.clone()), Json(peer)).await,
+            Some("link") => {
+                link(
+                    State(app.clone()),
+                    Json(LinkInput {
+                        peer,
+                        mode: String::new(),
+                    }),
+                )
+                .await
+            }
+            Some("sync") => sync(State(app.clone()), Json(peer)).await,
+            Some("records") => records(State(app.clone()), Json(peer)).await,
+            _ => bail!("--control action must be forget, reset-link, link, sync or records"),
+        }
+        .map_err(|error| error.0)?;
+        println!(
+            "{}",
+            json!({"pubky": app.pubky.to_app_key(), "result": result.0})
+        );
+        return Ok(());
+    }
     let port: u16 = env::var("FIXTURE_PORT")
         .unwrap_or_else(|_| "3002".into())
         .parse()?;
@@ -755,6 +966,9 @@ async fn main() -> Result<()> {
         .route("/sync", post(sync))
         .route("/records", post(records))
         .route("/request", post(issue))
+        .route("/replace", post(replace))
+        .route("/forget", post(forget))
+        .route("/reset-link", post(reset_link))
         .route("/accept", post(accept))
         .route("/reject", post(reject))
         .route("/cancel", post(cancel))
@@ -766,4 +980,23 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
     axum::serve(listener, router).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_rename_preserves_reference_and_terms() {
+        let old = "71300000-0000-4000-8000-000000000001";
+        let new = "71300000-0000-4000-8000-000000000002";
+        let raw = json!({"payment_request_id": old, "request": {"payment_reference": old}, "event_id": "unchanged"});
+        let changed: Value =
+            serde_json::from_str(&rename_request(&raw.to_string(), old, new).unwrap()).unwrap();
+        assert_eq!(changed["payment_request_id"], new);
+        assert_eq!(changed["request"], raw["request"]);
+        assert_eq!(changed["event_id"], raw["event_id"]);
+        assert!(rename_request(&raw.to_string(), new, old).is_err());
+        assert!(rename_request(&raw.to_string(), old, "invalid").is_err());
+    }
 }

@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Simplify LND funding step in README to a single command instead of clipboard-based two-step flow
 
 ### Fixed
+- Enable rc74 payment request fixture linking and same-ID proposal replacement
 - Pair the Shop and Lock Server denomination-aware setup API, including the seller provisioning helper
 - Bound the Shop build Node heap and serialize app builds to limit peak Docker memory use
 - Preserve the payment server's network namespace when starting Shop apps so the USDT verifier keeps its RPC connection

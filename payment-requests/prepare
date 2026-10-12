@@ -20,7 +20,7 @@ fail() {
 # --fail-with-body keeps the peer's JSON error; show it with the failing call instead of a bare HTTP code.
 post() {
   local response
-  if ! response=$(curl --fail-with-body -sS -X POST "http://127.0.0.1:$1$2" -H 'content-type: application/json' -d "$3" 2>&1); then
+  if ! response=$(curl --max-time 20 --fail-with-body -sS -X POST "http://127.0.0.1:$1$2" -H 'content-type: application/json' -d "$3" 2>&1); then
     echo "prepare: POST :$1$2 failed: $response" >&2
     return 1
   fi
@@ -30,7 +30,7 @@ post() {
 # The peers publish their identities before they listen. Until then Docker's port proxy refuses or resets the
 # connection (curl --retry retries only the refusal), so poll /health for up to 150 seconds.
 wait_health() {
-  until curl -fsS -o /dev/null "http://127.0.0.1:$1/health" 2>/dev/null; do
+  until curl --max-time 5 -fsS -o /dev/null "http://127.0.0.1:$1/health" 2>/dev/null; do
     if [ "$SECONDS" -ge "$deadline" ]; then
       fail "port $1 did not answer /health; see: docker compose --profile marketplace --profile payment-requests logs fixture-issuer rc56-peer"
     fi
@@ -41,8 +41,8 @@ deadline=$((SECONDS + 150))
 wait_health "$issuer_port"
 wait_health "$peer_port"
 
-issuer=$(curl --fail-with-body -sS http://127.0.0.1:$issuer_port/info)
-peer=$(curl --fail-with-body -sS http://127.0.0.1:$peer_port/info)
+issuer=$(curl --max-time 20 --fail-with-body -sS http://127.0.0.1:$issuer_port/info)
+peer=$(curl --max-time 20 --fail-with-body -sS http://127.0.0.1:$peer_port/info)
 to_peer=$(jq -nc --arg pubky "$(jq -r .pubky <<<"$peer")" --arg path "$(jq -r .receiver_path <<<"$peer")" '{peer_pubky:$pubky,peer_path:$path}')
 to_issuer=$(jq -nc --arg pubky "$(jq -r .pubky <<<"$issuer")" --arg path "$(jq -r .receiver_path <<<"$issuer")" '{peer_pubky:$pubky,peer_path:$path}')
 
@@ -63,6 +63,10 @@ for _ in {1..20}; do
     linked=true
     break
   fi
+  printf 'prepare: issuer link %s; peer link %s\n' \
+    "$(jq -r '.link | if type == "object" then .state // "linking" else . end' <<<"$issuer_link")" \
+    "$(jq -r '.link | if type == "object" then .state // "linking" else . end' <<<"$peer_link")" >&2
+  [ "$SECONDS" -lt "$deadline" ] || break
   sleep 0.2
 done
 if [ "$linked" != true ]; then

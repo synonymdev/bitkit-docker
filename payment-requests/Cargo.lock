@@ -1688,8 +1688,8 @@ dependencies = [
 
 [[package]]
 name = "paykit-lib"
-version = "0.1.0-rc65"
-source = "git+https://github.com/pubky/paykit-rs.git?rev=7185ae7da9315028e5331442d71d739c27f1442c#7185ae7da9315028e5331442d71d739c27f1442c"
+version = "0.1.0-rc74"
+source = "git+https://github.com/pubky/paykit-rs.git?rev=03d4f05721e92d3944cb4d5af4b2c98c4390a5a8#03d4f05721e92d3944cb4d5af4b2c98c4390a5a8"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1711,8 +1711,8 @@ dependencies = [
 
 [[package]]
 name = "paykit-sdk"
-version = "0.1.0-rc65"
-source = "git+https://github.com/pubky/paykit-rs.git?rev=7185ae7da9315028e5331442d71d739c27f1442c#7185ae7da9315028e5331442d71d739c27f1442c"
+version = "0.1.0-rc74"
+source = "git+https://github.com/pubky/paykit-rs.git?rev=03d4f05721e92d3944cb4d5af4b2c98c4390a5a8#03d4f05721e92d3944cb4d5af4b2c98c4390a5a8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1934,9 +1934,9 @@ checksum = "33cb294fe86a74cbcf50d4445b37da762029549ebeea341421c7c70370f86cac"
 
 [[package]]
 name = "pubky"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2099d521cacff9a1bf2ad48978d4601608d80860d7b08f7ecb0ced98bb63b628"
+checksum = "c298b2ec3f482618764c4bdc5cd69a9e52515e95e315d8f2dd946b83e4d03362"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1966,9 +1966,9 @@ dependencies = [
 
 [[package]]
 name = "pubky-common"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9b32c46e101fa9b94fcb3f3baa5751d3f696b3823508697a4f407281cbe9c4c"
+checksum = "e4a8b4c4831885f025577109215022f7e785b8c421b516cdfe1b510c8f2653fe"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -1988,9 +1988,9 @@ dependencies = [
 
 [[package]]
 name = "pubky-noise"
-version = "0.1.0-rc12"
+version = "0.1.0-rc13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c034fc7c278e85960a566a032ee26acf9d9c00ee6f64d74fa1f73ee9ed7d4f06"
+checksum = "d05863db1f5683e6c539c384eb7d9372451faad4770916b279bf6e1de2a5008a"
 dependencies = [
  "chacha20poly1305",
  "curve25519-dalek 5.0.0",

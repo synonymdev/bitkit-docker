@@ -200,7 +200,7 @@ build() {
 # driver's (a service context). Build both with the classic builder from generated Dockerfiles: the named contexts become
 # COPYs from .marketplace/sources, the cache mounts go, and the labels name the pinned revisions as the Compose build does.
 classic_build() {
-  docker image inspect bitkit-docker/pubky-testnet:0.14.0 >/dev/null 2>&1 || compose build pubky-testnet
+  docker image inspect bitkit-docker/pubky-testnet:0.15.0 >/dev/null 2>&1 || compose build pubky-testnet
   printf '**/.git\n**/target\n' > "$SOURCES/.dockerignore"
   python3 - "$SOURCES/paykit-server/Dockerfile.local" "$PAYKIT_SERVER_REV" "$PAYKIT_RS_REV" "$PAYKIT_SERVER_PATCHES" > "$SOURCES/Dockerfile.classic" <<'PY'
 import re, sys
@@ -219,15 +219,15 @@ if named != 1 or server_copy != 1 or "--mount" in text:
 print(text + f'\nLABEL tech.masivo.paykit-server="{server}" tech.masivo.paykit-rs="{paykit}" tech.masivo.paykit-server-patches="{patches}"')
 PY
   docker build -q -f "$SOURCES/Dockerfile.classic" -t "$PAYKIT_SERVER_IMAGE" "$SOURCES"
-  { sed -e "s|^COPY --from=paykit |COPY --from=$PAYKIT_SERVER_IMAGE |" -e "s|^COPY --from=fixture |COPY --from=bitkit-docker/payment-request-fixture:rc65-shared |" marketplace/driver/Dockerfile
+  { sed -e "s|^COPY --from=paykit |COPY --from=$PAYKIT_SERVER_IMAGE |" -e "s|^COPY --from=fixture |COPY --from=bitkit-docker/payment-request-fixture:rc74-shared |" marketplace/driver/Dockerfile
     echo "LABEL tech.masivo.paykit-server=\"$PAYKIT_SERVER_REV\" tech.masivo.paykit-rs=\"$PAYKIT_RS_REV\""; } > marketplace/driver/.Dockerfile.classic
   docker build -q -f marketplace/driver/.Dockerfile.classic -t "$DRIVER_IMAGE" marketplace/driver
   rm -f marketplace/driver/.Dockerfile.classic
 }
 
 images_present() {
-  docker image inspect bitkit-docker/pubky-testnet:0.14.0 "$PAYKIT_SERVER_IMAGE" \
-    "$DRIVER_IMAGE" bitkit-docker/payment-request-fixture:rc65-shared >/dev/null 2>&1
+  docker image inspect bitkit-docker/pubky-testnet:0.15.0 "$PAYKIT_SERVER_IMAGE" \
+    "$DRIVER_IMAGE" bitkit-docker/payment-request-fixture:rc74-shared >/dev/null 2>&1
 }
 
 wait_ready() {

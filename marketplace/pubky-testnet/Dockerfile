@@ -5,7 +5,7 @@
 # one before it writes shared state); the earlier Pubky Core pin answered 405.
 FROM rust:1.98.1-bookworm AS builder
 
-ARG PUBKY_TESTNET_VERSION=0.14.0
+ARG PUBKY_TESTNET_VERSION=0.15.0
 RUN cargo install pubky-testnet --version "${PUBKY_TESTNET_VERSION}" --locked --root /opt/pubky
 
 FROM debian:bookworm-slim

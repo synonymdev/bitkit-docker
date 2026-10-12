@@ -43,7 +43,7 @@ payment controls, proof verification, the optional Shop overlay and simulation l
 - **VSS Server**: Versioned Storage Server for app and ldk-node state backups
 - **Homegate**: Pubky Homeserver signup gatekeeper with local admin API mock
 - **Pubky marketplace fixture** (opt-in `marketplace` profile): Pubky testnet, Paykit Server and a purchase driver for the marketplace wallet journey
-- **Payment Request fixture** (opt-in `payment-requests` profile): rc65 issuer and controlled peer on the marketplace Pubky testnet
+- **Payment Request fixture** (opt-in `payment-requests` profile): rc74 issuer and controlled peer on the marketplace Pubky testnet
 
 ## Quick Start
 
@@ -311,7 +311,7 @@ docker compose logs -f bitcoind
 
 #### Payment Requests and Deadline History
 
-The `payment-requests` profile starts two disposable Paykit rc65 SDK peers (paykit-rs `7185ae7`, Pubky 0.14.0) on
+The `payment-requests` profile starts two disposable Paykit rc74 SDK peers (paykit-rs `03d4f05721e92d3944cb4d5af4b2c98c4390a5a8`, Pubky 0.15.0) on
 the marketplace fixture's Pubky testnet. `fixture-issuer` publishes a regtest
 Paykit endpoint and sends one-time requests. `rc56-peer` can accept, reject,
 cancel and pay requests through the shared regtest Bitcoin node. Plain
@@ -321,7 +321,7 @@ cancel and pay requests through the shared regtest Bitcoin node. Plain
 ```bash
 ./pubky-marketplace up
 ./pubky-marketplace seed
-docker compose --profile marketplace --profile payment-requests build fixture-issuer
+docker compose --profile marketplace --profile payment-requests build pubky-testnet homeserver-proxy fixture-issuer
 docker compose --profile marketplace --profile payment-requests up -d --no-build fixture-issuer rc56-peer
 for port in 23012 23013; do
   until health=$(curl -fsS "http://127.0.0.1:$port/health"); do sleep 2; done
@@ -398,12 +398,91 @@ Pubky testnet's network namespace, so `./pubky-marketplace down` and `reset`
 remove them together with the testnet. After `reset`, start them again with the
 `up -d --no-build fixture-issuer rc56-peer` command above, wait for `/health`,
 rerun `payment-requests/prepare` and relink the app. `./pubky-marketplace seed`
-needs outbound internet for Paykit Server setup; the rc65 peer calls use the
+needs outbound internet for Paykit Server setup; the rc74 peer calls use the
 local testnet. The lane still needs a Bitkit build pointed at the local Pubky
 testnet and to verify the requested rows on device. The headless preparation
 command does not populate a separate Bitkit identity's history; accepted and
 paid app rows require the lane's controlled client to prepare those records
 with the app's identity or an app build that supports importing fixture state.
+
+##### Proposal identity controls
+
+The rc74 fixture requires the local Pubky 0.15 homeserver. Build and start
+`pubky-testnet`, `homeserver-proxy`, `fixture-issuer` and `rc56-peer` from this
+checkout in the test's own Compose project. Preserve the seat's generated
+Compose overrides and port mappings; never restart a different project's services.
+`/health` reports `paykit_rs_rev` and the available controls, and both peer
+services have a Compose healthcheck. Before opening Contact Pay, finish
+`payment-requests/prepare --link-only`; then establish the app's own link with
+the issuer and verify `/sync` reports `link: linked`. A linking SDK report is
+progress, not a completed link. All fixture calls below need a client timeout.
+The fixture cannot link an app pointed at staging to its local testnet.
+
+Check the fixture's controls with two fresh disposable peers (no app or device):
+
+```bash
+python3 payment-requests/proposal-smoke.py \
+  --issuer "http://127.0.0.1:${FIXTURE_ISSUER_PORT:-23012}" \
+  --peer "http://127.0.0.1:${RC56_PEER_PORT:-23013}"
+# On another fresh pair, add --monthly to check a recurring proposal.
+```
+
+The smoke checks that a request keeps its exact terms and request ID, receives
+a new proposal stream ID after forgetting and relinking, refuses the old ID,
+and accepts the current ID. It consumes the pair's disposable history; do not
+rerun it on a pair that has already accepted a request.
+
+`POST /replace` takes `peer_pubky`, `peer_path` and `payment_request_id`. It
+resends the original issued terms under that request ID with a fresh Event ID.
+It returns both Event IDs and refuses an unknown request ID. This endpoint
+alone creates a duplicate-proposal conflict if the receiver still retains the
+original. For a true replacement, use the SDK's blocked-peer forget flow on
+the receiving disposable identity first, then establish a fresh link:
+
+1. Issue a request, receive it, and sync the issuer to persist its delivery
+   confirmation. Save the receiver's `proposal_stream_item_id` from `/records`.
+2. Keep the app's review open. On the receiver, block, forget, and unblock the
+   issuer through `/forget` (or the imported-identity command below). On the
+   issuer, call `/reset-link` for that receiver. It drops only the transport link.
+3. Drive `/link` and `/sync` on both sides until both report `linked`.
+4. Call issuer `/replace`, receive it on the receiver, and inspect `/records`:
+   the same request ID must be `Proposed`, with unchanged terms and a different
+   non-null proposal stream ID. A conflict is not a successful replacement.
+
+The `/accept` control accepts `expected_proposal_stream_item_id` so a fixture
+client can retain an earlier reviewed ID. Omitting it uses the current ID for
+ordinary history preparation. The `/forget` SDK operation refuses identities
+that already acted on the peer's requests or have active execution claims;
+use an unaccepted disposable request.
+
+For a lane's disposable app identity, the same binary can perform headless
+link and history control. Supply that identity's **Pubky** mnemonic, not an
+unverified Bitcoin wallet mnemonic, in a temporary test-data file under the
+seat checkout. Use the app's published Paykit App ID as `APP_ID` and its known
+public key as `EXPECTED_PUBKY`. The controller refuses a mismatched identity
+before initializing SDK state, and does not republish its app or endpoints.
+Do not use a personal wallet or a host credential store.
+
+```bash
+# APP_PUBKY, APP_ID, ISSUER_PUBKY and the disposable mnemonic file come from this test run.
+# COMPOSE_FILE and COMPOSE_PROJECT_NAME remain the seat's own values.
+CONTROL_INPUT=$(jq -nc --arg pubky "$ISSUER_PUBKY" '{peer_pubky:$pubky,peer_path:"paykit-server"}')
+docker compose --profile marketplace --profile payment-requests run --rm -T --no-deps \
+  -e MNEMONIC_FILE=/test-pubky-mnemonic -e EXPECTED_PUBKY="$APP_PUBKY" -e APP_ID="$APP_ID" \
+  -v "$PWD/.qa-pubky-mnemonic:/test-pubky-mnemonic:ro" \
+  fixture-issuer --control link <<<"$CONTROL_INPUT"
+# Repeat with --control sync, records, or forget. Each invocation returns the verified app pubky and result.
+```
+
+The imported controller uses the same shared SDK storage as the disposable
+app, so it can advance the link while a sheet remains open. Device installation
+and the app's consumption of that state must be verified on the test run's lane.
+
+A missing `proposal_stream_item_id` is not a field an issuer can omit in a
+wire proposal: the receiving SDK assigns it from its local stream. This fixture
+delivers real proposals and cannot synthesize a malformed app-service DTO with
+terms but no received proposal ID. That case needs an app-side record injection
+seam; a stalled link or a duplicate-proposal conflict does not prove it.
 
 ##### Withholding the issuer's endpoints
 
@@ -433,7 +512,7 @@ attempt resolves it. Without `peer_pubky`, only the public endpoint changes.
 #### Following the apps' Paykit pin
 
 The Paykit fixtures must run the paykit-rs version the app under test pins: the payment request peers
-(`payment-request-fixture:rc65-shared`, paykit-rs `7185ae7`, v0.1.0-rc65) and Paykit Server (built from
+(`payment-request-fixture:rc74-shared`, paykit-rs `03d4f05`, v0.1.0-rc74) and Paykit Server (built from
 the head of [pubky/paykit-server#46](https://github.com/pubky/paykit-server/pull/46), `0ffd4da`, until it
 merges or is released). Each image records the paykit-rs commit it was built from (label
 `tech.masivo.paykit-rs`, or `/usr/local/share/paykit-rs-rev` in the peers' image).

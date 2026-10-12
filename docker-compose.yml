@@ -472,9 +472,8 @@ services:
   pubky-testnet:
     profiles: [marketplace]
     container_name: marketplace-pubky-testnet
-    # The homeserver of 0.14.0 answers the Pubky SDK's LOCK and UNLOCK write locks that current Bitkit builds take before writing Paykit state; the
-    # earlier Pubky Core pin (f68014c1) answered 405.
-    image: bitkit-docker/pubky-testnet:0.14.0
+    # Shared SDK state in rc74 requires homeserver 0.15 or newer, including write-lock enforcement.
+    image: bitkit-docker/pubky-testnet:0.15.0
     build:
       context: ./marketplace/pubky-testnet
     restart: "no" # the fixture is disposable: a restarted testnet loses its accounts
@@ -559,7 +558,7 @@ services:
       context: ./marketplace/driver
       additional_contexts:
         paykit: service:paykit-server
-        fixture: docker-image://bitkit-docker/payment-request-fixture:rc65-shared
+        fixture: docker-image://bitkit-docker/payment-request-fixture:rc74-shared
       labels:
         tech.masivo.paykit-server: ${PAYKIT_SERVER_REV:-0ffd4da2adaab048939e0ea18ff916a27a7cfb0e}
         tech.masivo.paykit-rs: ${PAYKIT_RS_REV:-7185ae7da9315028e5331442d71d739c27f1442c}
@@ -581,7 +580,7 @@ services:
   # (6298) delays or fails the requests of one identity and path (README, Homeserver proxy). Without rules it only forwards.
   homeserver-proxy:
     profiles: [marketplace]
-    image: bitkit-docker/payment-request-fixture:rc65-shared
+    image: bitkit-docker/payment-request-fixture:rc74-shared
     build: ./payment-requests
     restart: on-failure
     network_mode: service:pubky-testnet
@@ -589,16 +588,21 @@ services:
       - pubky-testnet
     entrypoint: ["/usr/local/bin/homeserver-proxy"]
 
-  # The rc65 SDK peers (paykit-rs 7185ae7, the version both apps pin) share the marketplace testnet namespace and regtest chain. The service name `rc56-peer` stays: lanes and journeys address the peer by it.
+  # The rc74 SDK peers (paykit-rs 03d4f05) share the marketplace testnet namespace and regtest chain. The service name `rc56-peer` stays: lanes and journeys address the peer by it.
   fixture-issuer:
     profiles: [payment-requests]
-    image: bitkit-docker/payment-request-fixture:rc65-shared
+    image: bitkit-docker/payment-request-fixture:rc74-shared
     build: ./payment-requests
     restart: "no"
     network_mode: service:pubky-testnet
     depends_on:
       - pubky-testnet
       - bitcoind
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/fixture", "--health"]
+      interval: 2s
+      timeout: 6s
+      retries: 75
     environment:
       FIXTURE_ROLE: fixture-issuer
       FIXTURE_PORT: 3012
@@ -606,13 +610,18 @@ services:
 
   rc56-peer:
     profiles: [payment-requests]
-    image: bitkit-docker/payment-request-fixture:rc65-shared
+    image: bitkit-docker/payment-request-fixture:rc74-shared
     build: ./payment-requests
     restart: "no"
     network_mode: service:pubky-testnet
     depends_on:
       - pubky-testnet
       - bitcoind
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/fixture", "--health"]
+      interval: 2s
+      timeout: 6s
+      retries: 75
     environment:
       FIXTURE_ROLE: rc56-peer
       FIXTURE_PORT: 3013
