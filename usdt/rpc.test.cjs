@@ -2,6 +2,21 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { rpc, serve, upstreamReader } = require('./rpc.cjs');
 const { atomicAmount } = require('./contracts.cjs');
+const { PUBLIC_UPSTREAM, upstreamUrl } = require('./upstream.cjs');
+
+test('fork upstream defaults to a public archive and preserves explicit overrides', () => {
+  assert.equal(upstreamUrl(''), PUBLIC_UPSTREAM);
+  assert.equal(upstreamUrl('# empty optional file\n'), PUBLIC_UPSTREAM);
+  assert.equal(
+    upstreamUrl('ARBITRUM_RPC_URL=https://example.org/private'),
+    'https://example.org/private',
+  );
+  for (const value of ['', 'http://example.org', 'invalid']) {
+    assert.throws(() => upstreamUrl(`ARBITRUM_RPC_URL=${value}`), {
+      message: 'Provide an HTTPS ARBITRUM_RPC_URL in USDT_TEST_ENV_FILE',
+    });
+  }
+});
 
 test('upstream forwards reads, blocks writes and hides provider credentials', async (t) => {
   const calls = [];

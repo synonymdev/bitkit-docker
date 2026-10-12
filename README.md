@@ -8,7 +8,6 @@ Run the shared Arbitrum fork, Alto and gateway without spending mainnet funds:
 
 ```sh
 ./usdt-fixture build
-export USDT_TEST_ENV_FILE=/absolute/path/to/private.env
 ./usdt-fixture up
 ./usdt-fixture check
 ./usdt-fixture smoke
@@ -17,8 +16,11 @@ eval "$(./usdt-fixture env)"
 ./usdt-fixture fund 0xYOUR_TEST_WALLET 10
 ```
 
-The private file contains `ARBITRUM_RPC_URL=https://...` with historical-state access.
-An Alchemy Free Arbitrum endpoint is sufficient within its quota: the fixture paces
+The fixture uses a public archive endpoint for read-only fork state by default;
+no upstream credential file is required. If public RPC is unavailable or throttled,
+set `USDT_TEST_ENV_FILE=/absolute/path/to/private.env` to select an existing private
+file containing `ARBITRUM_RPC_URL=https://...` with historical-state access.
+An Alchemy Free Arbitrum endpoint is sufficient within its quota. The fixture paces
 upstream reads and excludes pre-fork mainnet logs. Payment history and recovery
 cover transfers made locally after the fork; use disposable test wallets.
 Requires Docker Compose, Git access to the pinned Core/service repositories, jq
@@ -32,6 +34,15 @@ to deliver local tokens. `orchestra list` shows outgoing quotes; `layerzero
 SOURCE_TX DELIVERED` updates a real USDT0 source message. See [USDT fixture](docs/usdt-fixture.md) for versions, app setup, pending
 payment controls, proof verification, the optional Shop overlay and simulation limits.
 
+On a QA seat, set `USDT_PROJECT` to the seat's own Compose project and set
+`USDT_GATEWAY_PORT` and `USDT_CONTROL_PORT` to that seat's published ports.
+Use the launcher for build and startup so image fingerprints agree. The seat
+must forward both ports from its service box to the app device.
+`./usdt-fixture env` prints local overrides for all four app URLs. Check
+`./usdt-fixture status` and the gateway's `/healthz` before installing the app
+with those overrides. Keep the same chain alive through restart and restore.
+This bypasses public gateway DNS without changing host DNS. Bridge destination
+delivery remains simulated; live destination settlement needs separate acceptance.
 
 ## Services
 
@@ -63,6 +74,15 @@ payment controls, proof verification, the optional Shop overlay and simulation l
    curl http://localhost:23000/health
    curl http://localhost:6288/
    ```
+On a QA seat, set `USDT_PROJECT` to the seat's own Compose project and set
+`USDT_GATEWAY_PORT` and `USDT_CONTROL_PORT` to that seat's published ports.
+Use the launcher for build and startup so image fingerprints agree. The seat
+must forward both ports from its service box to the app device.
+`./usdt-fixture env` prints local overrides for all four app URLs. Check
+`./usdt-fixture status` and the gateway's `/healthz` before installing the app
+with those overrides. Keep the same chain alive through restart and restore.
+This bypasses public gateway DNS without changing host DNS. Bridge destination
+delivery remains simulated; live destination settlement needs separate acceptance.
 
 ## Services Overview
 

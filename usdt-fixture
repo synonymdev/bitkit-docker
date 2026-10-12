@@ -49,8 +49,8 @@ if [ "$#" -gt 0 ]; then shift; fi
 case "$command" in
   build) build ;;
   up)
-    if [ -z "${USDT_TEST_ENV_FILE:-}" ] || [ ! -f "$USDT_TEST_ENV_FILE" ]; then
-      echo 'Set USDT_TEST_ENV_FILE to a private file containing ARBITRUM_RPC_URL=https://...' >&2
+    if [ -n "${USDT_TEST_ENV_FILE:-}" ] && [ ! -f "$USDT_TEST_ENV_FILE" ]; then
+      echo 'USDT_TEST_ENV_FILE must name an existing private upstream file.' >&2
       exit 1
     fi
     compose up -d --wait --wait-timeout 180 "${SERVICES[@]}"
@@ -98,7 +98,8 @@ Usage: ./usdt-fixture <command>
   layerzero TX STATUS | layerzero-mode MODE
   reset             Revert this chain and clear provider/bundler state; reset test apps separately
 
-Requires Docker Compose, Git, jq and tar. For up, set USDT_TEST_ENV_FILE to a private env file.
+Requires Docker Compose, Git, jq and tar. Uses a public archive RPC by default.
+Optional USDT_TEST_ENV_FILE selects a private upstream containing ARBITRUM_RPC_URL=https://...
 USDT_PROJECT selects a dedicated project (default usdt-fixture); keep it constant.
 USDT_GATEWAY_PORT/USDT_CONTROL_PORT select host ports (23453/23454 by default).
 HELP

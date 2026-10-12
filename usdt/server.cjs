@@ -1,5 +1,4 @@
 const { readFileSync } = require('node:fs');
-const { parseEnv } = require('node:util');
 const { setTimeout: delay } = require('node:timers/promises');
 const assert = require('node:assert/strict');
 const { toHex } = require('viem');
@@ -20,13 +19,10 @@ const pins = require('./pins.json');
 const { serveProvider } = require('./bridge-http.cjs');
 const { OrchestraFixture } = require('./orchestra.cjs');
 const { LayerZeroFixture } = require('./layerzero.cjs');
+const { upstreamUrl } = require('./upstream.cjs');
 
 async function run() {
-  const { ARBITRUM_RPC_URL: upstream } = parseEnv(
-    readFileSync('/run/secrets/usdt_upstream', 'utf8'),
-  );
-  if (!upstream || new URL(upstream).protocol !== 'https:')
-    throw new Error('Provide an HTTPS ARBITRUM_RPC_URL in USDT_TEST_ENV_FILE');
+  const upstream = upstreamUrl(readFileSync('/run/secrets/usdt_upstream', 'utf8'));
   const servers = [];
   let finish;
   const lifetime = new Promise((resolve) => {
