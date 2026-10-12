@@ -1,0 +1,1 @@
+{"name":"bitkit-arbitrum-fixture","private":true,"type":"module","scripts":{"smoke":"node smoke.mjs"},"dependencies":{"ethers":"6.17.0"}}

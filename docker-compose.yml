@@ -6,6 +6,39 @@
 x-trezor-user-env-image: &trezor_user_env_image ghcr.io/trezor/trezor-user-env@sha256:15871ebb234bf7c0197cfcd31ddc2edbe90173cd6386fc0283fafe05bf888c06
 
 services:
+  arbitrum-chain:
+    profiles: [arbitrum]
+    image: ghcr.io/foundry-rs/foundry:v1.3.1
+    entrypoint: [anvil]
+    command: [--host, 0.0.0.0, --port, '8545', --chain-id, '42161', --hardfork, prague, --fork-url, '${ARBITRUM_FORK_URL:-https://arb1.arbitrum.io/rpc}', --gas-limit, '30000000']
+    ports:
+      - '127.0.0.1:23545:8545'
+    healthcheck:
+      test: [CMD, cast, chain-id, --rpc-url, 'http://127.0.0.1:8545']
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  arbitrum-provider:
+    profiles: [arbitrum]
+    image: bitkit-docker/arbitrum-provider:fixture-v1
+    build: ./arbitrum-fixture
+    environment:
+      ANVIL_URL: http://arbitrum-chain:8545
+    ports:
+      - '127.0.0.1:23546:8546'
+    volumes:
+      - arbitrum_fixture_data:/data
+    depends_on:
+      arbitrum-chain:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8546/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 15s
+      retries: 30
+      start_period: 120s
+
   bitcoind:
     container_name: bitcoin
     image: btcpayserver/bitcoin:26.0
@@ -865,6 +898,7 @@ services:
       - "127.0.0.1:23141:23141"
 
 volumes:
+  arbitrum_fixture_data:
   trezor_emulator_state:
   trezor_emulator_logs:
   bitcoin_home:

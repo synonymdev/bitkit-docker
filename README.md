@@ -12,6 +12,7 @@ A complete Docker-based development environment for Bitcoin and Lightning Networ
 - **VSS Server**: Versioned Storage Server for app and ldk-node state backups
 - **Homegate**: Pubky Homeserver signup gatekeeper with local admin API mock
 - **Pubky marketplace fixture** (opt-in `marketplace` profile): Pubky testnet, Paykit Server and a purchase driver for the marketplace wallet journey
+- **Arbitrum USDT fixture** (opt-in `arbitrum` profile): a local fork, ERC-20 funding and a controlled EIP-7702 bundler
 - **Payment Request fixture** (opt-in `payment-requests` profile): rc65 issuer and controlled peer on the marketplace Pubky testnet
 
 ## Quick Start
@@ -109,6 +110,104 @@ curl -fsS http://localhost:23010/fixture/invoices | jq
 
 Healthy invoices use the requested amount in millisatoshis and bind the exact metadata with a SHA-256 description hash. They are signed, freshly generated `lnbcrt` invoices with a one-hour expiry and payment secret. This fixture supports invoice fetching, decoding and callback retry journeys; it has no Lightning node or channels and cannot settle payments. Use the regular LNURL server with LND for actual payments. Its controls are unauthenticated and intended only for disposable local test environments.
 
+### Arbitrum USDT fixture
+
+The opt-in `arbitrum` profile provides a funded local Arbitrum One fork and an
+ERC-4337/EIP-7702 provider. It retains the addresses of USDT0, EntryPoint 0.8,
+Simple7702Account and the ERC-20 paymaster used by Core. The upstream RPC is
+read-only; funding, signer registration and all transactions execute on Anvil.
+The default upstream is `https://arb1.arbitrum.io/rpc`; a credential-free archive
+RPC can be selected with `ARBITRUM_FORK_URL` if the public endpoint is unavailable.
+
+```bash
+docker compose --profile arbitrum up -d --build --wait --wait-timeout 240 arbitrum-provider
+curl -fsS http://127.0.0.1:23546/health
+# Prove the fixture itself: funded account, two signed transfers, lost response,
+# real receipts and a submission journal. This uses disposable test accounts.
+docker compose --profile arbitrum exec -T arbitrum-provider node smoke.mjs
+```
+
+The default public test mnemonic is `test test test test test test test test test test test junk`.
+Its first account starts with 1,000 USDT. Fund any app's displayed Arbitrum address
+without changing its mnemonic:
+
+```bash
+curl -fsS http://127.0.0.1:23546/v1/usdt/chain-rpc \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"test_fundWallet","params":["<app Arbitrum address>"]}'
+curl -fsS http://127.0.0.1:23546/fixture/submissions
+# Execute the next signed operation, then close the connection before replying.
+curl -fsS http://127.0.0.1:23546/fixture -H 'Content-Type: application/json' \
+  -d '{"dropNextSubmissionResponse":true}'
+```
+
+`test_fundWallet` sets exactly 1,000 USDT and returns `true`; it does not reset an
+account's nonce or delegation. The submission journal records receipt time,
+operation hash, transaction hash and mined block. Requests rejected before
+broadcast remain marked `received`; only `submitted` or `mined` records prove a
+broadcast. The one-shot lost-response control resets to `false` when consumed
+or when the provider restarts. Wallet restarts and provider restarts preserve
+chain evidence and the journal. Keep Anvil running throughout a recovery run:
+Anvil restart does not preserve historical receipts. The provider checks the
+chain instance and refuses to serve a replacement chain with the old journal.
+For a new fixture, recreate both services and only this project's
+`arbitrum_fixture_data` volume; do not tear down unrelated seat services.
+
+Both `/v1/usdt/chain-rpc` and `/v1/usdt/rpc` on port `23546` answer JSON-RPC.
+`eth_getLogs` exposes only locally mined history after the fork block. Gas and
+token pricing are fixed fixture estimates; this is not a production bundler,
+provider-pricing test or a bridge/destination fixture. Contract execution and
+receipt logs are real. The provider adapts Core's `tests/usdt-fork/provider.mjs`
+from commit `98bf9c6`, with arbitrary-wallet funding, health checks, a durable
+journal, restart guards and a lost-response control. It requires Node 22 and
+pinned ethers 6.17.0; Anvil is pinned to Foundry 1.3.1.
+
+For a QA seat that was already provisioned before this profile existed, render
+only these services and start them in the seat's existing project. This also
+works when its current generated Compose file lacks the new profile:
+
+```bash
+# On the fixture box, check out the fixture commit in its bitkit-docker copy,
+# then run from that checkout. Set the project's name and port offset from
+# the seat's environment; offset is its published bitcoind RPC port minus 43782.
+python3 scripts/render-arbitrum-profile.py --port-offset <offset> \
+  --out <seat fixture directory>/arbitrum.compose.json
+docker compose -p <seat project> -f <seat fixture directory>/arbitrum.compose.json \
+  --profile arbitrum up -d --build --wait --wait-timeout 240 arbitrum-provider
+curl -fsS http://127.0.0.1:<23546+offset>/health
+```
+
+The rendered file keeps the seat's project/network and shifts the two base
+ports by its block. It includes only these services, so starting it leaves the
+project's existing services running. Do not pass `--remove-orphans`. The box
+checkout returns to `main` after the fixture change is merged. Relay the seat's
+provider port to its own device host, then use that seat's ADB server and serial:
+`adb -P <seat adb port> -s <serial> reverse tcp:23546 tcp:<relayed provider port>`.
+Core accepts fixture HTTP URLs on device loopback, not `10.0.2.2`.
+
+Android builds must select the reviewed Core artifact, including matching
+bindings and every native ABI, instead of a published older version:
+
+```bash
+# On the coordinator or build host, using the existing gh login:
+python3 scripts/fetch-bitkit-core-android.py --commit <full reviewed Core SHA> \
+  --out <artifact directory>
+# In the test run's Android checkout, use the AAR path from manifest.json:
+./gradlew :app:assembleDevDebug -PbitkitCoreAar=<absolute AAR path> \
+  -PUSDT_RPC_URL=http://127.0.0.1:23546/v1/usdt/chain-rpc \
+  -PUSDT_BUNDLER_URL=http://127.0.0.1:23546/v1/usdt/rpc \
+  -PUSDT_BRIDGES_URL= -PUSDT_DEPOSITS_URL= -PUSDT_BRIDGE_NETWORKS=
+```
+
+The helper requires a successful `Android Bindgen` run at that exact SHA and
+its unexpired `bitkit-core-android-bindgen` artifact. It checks four ELF native
+libraries and `UsdtWallet.sendWithDeadline`, writes the AAR checksum and source
+run to `manifest.json`, and fails explicitly while CI is building. It never
+falls back to a release or edits an app checkout. A local AAR changes the Core
+dependency; the test run must separately use an app integration that calls the
+intended Core API. Artifact checks run with
+`python3 -m unittest discover -s arbitrum-fixture -p '*_test.py'`.
+
 ### VSS Server
 
 - **Port**: 23050 (`127.0.0.1:23050` from the `vss` profile)
@@ -152,6 +251,7 @@ Every host port is 1024 or above. The ports Bitkit, the Pubky SDK or Bitkit's UI
 | LDK backup server | 23003 | 3003 |
 | LNURL server | 23000 | 3000 |
 | LNURL-pay fixture (`lnurl-pay`) | 23010 | 3010 |
+| Arbitrum chain, provider (`arbitrum`) | 23545, 23546 | 8545, 8546 |
 | PostgreSQL | 23432 | 5432 |
 | LNURL-auth server | 23005 | 5005 |
 | VSS server | 23050 | 5050 |
