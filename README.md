@@ -28,8 +28,9 @@ Anvil keeps the latest 128 historical states in memory and does not persist hist
 states to disk. Local transaction receipts and logs remain available for wallet history,
 recovery and payment proofs; RPC queries requiring older account/storage state are
 outside this retention window. Fork RPC caching remains enabled.
-The `smoke` check mines 256 blocks before checking history recovery and proofs,
-beyond the retention window. Validate with `./usdt-fixture check`,
+The `smoke` check mines 256 blocks in sequential batches of 16 to keep RPC requests
+short on slower hosts, then checks history recovery and proofs beyond the retention
+window. Validate with `./usdt-fixture check`,
 `./usdt-fixture smoke`, `./usdt-fixture max-smoke` and `./usdt-fixture bridge-smoke`.
 Run `./usdt-fixture reset-smoke` to check MAX quotes and settlement before and after repeated
 chain resets without restarting Alto. This resets the chain; use a dedicated
