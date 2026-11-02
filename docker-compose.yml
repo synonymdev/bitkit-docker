@@ -919,8 +919,9 @@ services:
     entrypoint: [/bin/sh, -c]
     volumes:
       - usdt_fork_cache:/home/node/.foundry
+    # Keep recent state for bundler queries without persisting a state per mined block.
     command:
-      - node wait.cjs upstream && exec anvil --host 127.0.0.1 --port 23450 --fork-url http://127.0.0.1:23455 --fork-block-number "$$(node -p "require('./pins.json').forkBlock")" --chain-id 42161 --hardfork prague --silent --block-time 1 --compute-units-per-second 150 --fork-retry-backoff 1000 --no-fork-node-info
+      - node wait.cjs upstream && exec anvil --prune-history 128 --host 127.0.0.1 --port 23450 --fork-url http://127.0.0.1:23455 --fork-block-number "$$(node -p "require('./pins.json').forkBlock")" --chain-id 42161 --hardfork prague --silent --block-time 1 --compute-units-per-second 150 --fork-retry-backoff 1000 --no-fork-node-info
 
   usdt-alto:
     profiles: [usdt]
@@ -930,10 +931,12 @@ services:
     network_mode: service:usdt-fixture
     depends_on:
       usdt-fixture:
-        condition: service_healthy
+        condition: service_started
     entrypoint: [/bin/sh, -c]
     command:
       - |
+        # The provider appears after fixture initialization; Alto must deploy before the snapshot.
+        node wait.cjs provider || exit 1
         KEY="$$(node -p "require('viem').toHex(require('./contracts.cjs').executor.getHdKey().privateKey)")"
         exec node node_modules/@pimlico/alto/esm/cli/alto.js --entrypoints 0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108 --rpc-url http://127.0.0.1:23450 --executor-private-keys "$$KEY" --utility-private-key "$$KEY" --port 23451 --chain-type default --safe-mode false --enable-debug-endpoints true --min-executor-balance 0 --log-level warn --json true
     healthcheck:

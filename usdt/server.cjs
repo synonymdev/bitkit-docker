@@ -6,6 +6,7 @@ const { toHex } = require('viem');
 const { rpc, serve, upstreamReader } = require('./rpc.cjs');
 const {
   TOKEN,
+  ENTRY,
   PAYMASTER,
   RATE,
   BALANCE_SLOT,
@@ -67,6 +68,8 @@ async function run() {
       await serve(ports.provider, async (method, params) => {
         if (mode === 'unavailable')
           throw Object.assign(new Error('Fixture provider unavailable'), { httpStatus: 503 });
+        // Startup readiness must not depend on Alto, which waits for this provider.
+        if (method === 'eth_chainId') return rpc(urls.node, method, params);
         if (method === 'pimlico_getTokenQuotes')
           return {
             quotes: [
@@ -93,6 +96,22 @@ async function run() {
     const layerzero = new LayerZeroFixture(urls.node);
     servers.push(await serveProvider(ports.orchestra, orchestra, 'local-orchestra-fixture'));
     servers.push(await serveProvider(ports.layerzero, layerzero));
+    // Alto deploys simulation contracts before opening its RPC server. Preserve those
+    // deployments in the reset baseline, otherwise quotes fail after evm_revert.
+    let altoReady = false;
+    for (let attempt = 0; attempt < 120; attempt++) {
+      try {
+        const entrypoints = await rpc(urls.alto, 'eth_supportedEntryPoints');
+        if (entrypoints.some((entry) => entry.toLowerCase() === ENTRY.toLowerCase())) {
+          altoReady = true;
+          break;
+        }
+      } catch {
+        // Alto may still be deploying its simulation contracts.
+      }
+      await delay(500);
+    }
+    assert(altoReady, 'Alto did not start');
     let snapshot = await rpc(urls.node, 'evm_snapshot');
     servers.push(
       await serve(
