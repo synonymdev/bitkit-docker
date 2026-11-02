@@ -334,7 +334,12 @@ the marketplace fixture's Pubky testnet. `fixture-issuer` publishes a regtest
 Paykit endpoint and sends one-time requests. `rc56-peer` can accept, reject,
 cancel and pay requests through the shared regtest Bitcoin node. Plain
 `docker compose up -d` does not start either peer. The commands below need
-`curl`, `jq` and `python3` on the host.
+`curl`, `jq` and Python 3.11+ on the host, or Python 3.10 with `tomli`
+(`sudo apt-get install python3-tomli` on Ubuntu). The QA guest setup installs this
+parser for existing Ubuntu 22.04 templates as well as newly prepared templates.
+The fixture build selects its acceptance API from the exact resolved SDK source:
+the legacy API stays available, while the stable API receives the observed
+proposal stream identity. An unknown API or missing proposal identity is refused.
 
 ```bash
 ./pubky-marketplace up
@@ -466,6 +471,28 @@ peers' image as `payment-request-fixture:<rc>-shared` when it was built from ano
 Paykit Server and the driver from the Paykit Server PR the app PR links (its merge commit once merged),
 else from master, when that revision locks the same paykit-rs tag (exit 4 when none does). Afterwards every
 tag Compose resolves for those images, `COMPOSE_FILE` overrides included, points at the new build.
+
+Registry-backed releases are checked by their exact `Cargo.lock` checksums. The
+helper checks both Paykit packages and Locks, validates their clean packaged Git
+revision, and compares their original manifests and Rust/source files with that
+revision. Package VCS metadata alone does not establish source equivalence.
+Checksummed public packages and source archives are cached under
+`.marketplace/provenance`; no operator credentials are stored there.
+
+After a successful alignment, `.marketplace/paykit-pins.json` retains the verified
+public revisions for later `pubky-marketplace` commands. Explicit environment
+overrides still take precedence. Stable releases use tags such as `0.1.0-shared`;
+prereleases keep tags such as `rc65-shared`. The classic Docker builder supports
+both the older Locks source context and current registry-release Dockerfiles;
+unknown build layouts still fail before a build.
+
+```bash
+scripts/follow-app-paykit synonymdev/bitkit-android <full-head-sha>
+./pubky-marketplace pins                    # inspect the selected public source pins
+./pubky-marketplace up
+scripts/follow-app-paykit synonymdev/bitkit-android <full-head-sha> --check
+python3 -B -m unittest discover -s scripts -p 'test_paykit*.py' -v
+```
 
 #### Homeserver proxy (explicit holds and selective faults)
 
@@ -715,6 +742,40 @@ Then, with the buyer wallet:
 ./pubky-marketplace peers --buyer <buyer pubky> --wait 60  # after the purchase: Paykit Server's link to the buyer is connected
 ```
 
+For the native request's raw asset/endpoint assertion, first read its actual
+`PaymentRequestRow-<uuid>` in Bitkit, then run:
+
+```sh
+# Linux prerequisite for this optional observation command:
+sudo apt-get install python3-nacl
+./pubky-marketplace request-info <bundle> <native-request-uuid>
+```
+
+This reads one delivered request's authenticated durable SDK handoff and prints
+only its correlated UUID, actual asset, amount and regtest endpoint JSON.
+Compare that UUID with the native row. It never accepts/pays, imports a session,
+changes the database or exports fixture keys. It supports the app-aligned
+semantic-outbox server (`caf2b6d`), whose version-2 intent uses Postcard binary
+serialization. The endpoint payload inside it is a JSON string. This observer
+supports unquoted Bitcoin intents with no conversion rates; quoted/unknown
+schemas and older layouts fail explicitly. A request not
+yet acknowledged as delivered can be polled read-only. The native request UUID
+and the purchase bundle are different identities. The QA worker installs PyNaCl
+inside its disposable guest; operator credentials stay outside it.
+
+Fixture tests use `python3 -m pip install PyNaCl==1.6.0` in a private virtualenv,
+then that Python's `-m unittest discover -s scripts -p 'test_*.py'`.
+The checked-in request golden is serialized by Rust Postcard 1.1.3, matching
+the pinned server lockfile. Tests compare it with an independent Node writer,
+decrypt it, and reject the previous JSON-intent assumption, truncated input,
+trailing bytes and unsupported layouts. Reproduce its bytes with:
+
+```sh
+cargo run --quiet --locked --manifest-path scripts/testdata/postcard-intent-generator/Cargo.toml \
+  < scripts/testdata/request-v2-intent.json
+# Compare stdout with scripts/testdata/request-v2.postcard.hex.
+```
+
 Pay the request in the app, then confirm with `./pubky-marketplace mine --bundle <bundle>`, `./pubky-marketplace wait <bundle> confirmed` and `./pubky-marketplace status <bundle>`. By default the seller of a purchase is the fixture's headless seller, and `verify` always uses it.
 
 To make a Bitkit wallet the seller, the wallet approves two Pubky requests for the same identity: the Paykit watch-only setup (it gives Paykit Server the wallet's account xpub, so payouts land in that wallet) and a write grant on `/pub/app.locks/` (the role Locks plays: the driver publishes the payment lock with the granted session). One request cannot carry both, because the apps accept the watch-only claim only for exactly the two Paykit paths.
@@ -725,10 +786,56 @@ To make a Bitkit wallet the seller, the wallet approves two Pubky requests for t
 ./pubky-marketplace setup-wait <flow>
 ./pubky-marketplace seller-auth                  # prints the marketplace grant request (first JSON line), waits for the approval (last line)
 ./pubky-marketplace purchase --seller bitkit --buyer <buyer pubky>
-./pubky-marketplace mine --bundle <bundle>       # after the buyer pays; add --address <bcrt1...> if two payments match the amount
+./pubky-marketplace mine --bundle <bundle> --txid <native-txid> # read TXID in the buyer's sent-activity details after paying
 ./pubky-marketplace wait <bundle> confirmed
 ./pubky-marketplace status <bundle>              # payout address, txid, signed Paykit status, purchase state
 ```
+
+For a native seller, the fixture cannot infer its payout address from an amount:
+an earlier wallet transfer can have the same amount. Read the transaction id in
+the buyer's native transaction details and pass `--txid` when mining. The fixture
+checks that exact mempool transaction and a unique amount-matched native SegWit
+output before binding it. Use `--address <known-payout-address>` too if the
+transaction has several equal outputs. A conflicting recorded transaction or
+address is refused. Before binding, `status` keeps the transaction/address null;
+read the Payment Request id from the native request row, not the bundle id.
+
+For an agent or a synchronous tool connection, use the split-phase grant flow
+instead of waiting inside `seller-auth`:
+
+Two native wallets do not need `seed`. Complete the seller's watch-only setup
+above, approve its marketplace grant below, then use `--seller bitkit` and the
+native buyer's public key. The fixture stores only that seller's approved grant;
+it does not create a headless seller identity or hold the native wallet's keys.
+
+```sh
+./pubky-marketplace seller-auth-start seller-1 --timeout 300
+./pubky-marketplace seller-auth-status seller-1  # poll until awaiting_approval includes auth_url
+# Open auth_url in the seller wallet, inspect /pub/app.locks READ, WRITE and authorize.
+./pubky-marketplace seller-auth-status seller-1  # poll until approved
+```
+
+The listener runs in one owned Compose container while native UI approval takes
+place. Keep its one-time URL private. Reusing the same operation ID polls the
+original listener; it never creates a second listener, even after a lost response.
+Changed arguments or image revisions require a new ID. An absent container after
+a recorded start is `uncertain` and is not replayed. Use a new explicit ID for a
+new attempt after investigating. `down` removes only listeners with matching
+fixture ownership and image identity before deleting the fixture state volumes.
+Failed status includes a bounded reason code; private grant URLs and raw stderr
+are omitted.
+
+The wrapper selects the lock/invoice schema from its verified pinned Locks
+source. Stable Locks requires an explicit 24-hour `payment_in` in both the
+published criterion and the signed invoice request; the legacy schema rejects
+that field and therefore omits it. Unknown schemas fail before a driver starts.
+Use the wrapper for marketplace driver commands so this selection accompanies
+the retained image/source pins.
+
+Driver images also carry a SHA-256 identity of the Dockerfile and all its local
+COPY inputs. `follow-app-paykit` rebuilds a missing/mismatched identity even when
+the Paykit dependency revision is unchanged. `up` rebuilds stale images, and
+individual driver commands refuse a stale image with a `build-paykit` instruction.
 
 Both URLs are `pubkyauth://signin_grant?...` links whose one-time secret must stay out of logs and evidence. On Android run each printed `android` command (`adb shell "am start -a android.intent.action.VIEW -d '<auth_url>'"`; keep the double quotes, or the device shell cuts the URL at the first `&`). With several devices or emulators pass `--serial <adb-serial>` to `setup-url` or `seller-auth` and the command gets `-s <adb-serial>`. On iOS the setup request opens through the printed `ios_url` (`xcrun simctl openurl <simulator-id> '<ios_url>'`); the marketplace grant has no iOS deep link, so put its `auth_url` on the simulator clipboard (`printf %s '<auth_url>' | xcrun simctl pbcopy <simulator-id>`) and use Scan QR Code, then Paste QR Code (E2E builds also have Enter QRCode String). The marketplace request goes through the testnet's HTTP relay on `localhost:15412` (published by the fixture; on Android it is one of the `adb reverse` ports above) and expires after about five minutes; pass `--relay https://httprelay.pubky.app/inbox/` to use the public relay instead. The setup request still uses the public relay and needs outbound internet.
 

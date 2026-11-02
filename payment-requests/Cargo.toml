@@ -3,6 +3,10 @@ name = "bitkit-payment-request-fixture"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+versioned-payment-request-acceptance = []
+
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"

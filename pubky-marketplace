@@ -7,6 +7,16 @@ set -euo pipefail
 CLI_NAME="$(basename "$0")"
 cd "$(dirname "$0")"
 
+# follow-app-paykit retains the verified public pins for every later command.
+if [ -f .marketplace/paykit-pins.json ]; then
+  read -r saved_server saved_paykit saved_tag saved_locks saved_locks_tag < <(python3 scripts/paykit-lock.py --pins .marketplace/paykit-pins.json)
+  PAYKIT_SERVER_REV=${PAYKIT_SERVER_REV:-$saved_server}
+  PAYKIT_RS_REV=${PAYKIT_RS_REV:-$saved_paykit}
+  PAYKIT_RS_TAG=${PAYKIT_RS_TAG:-$saved_tag}
+  LOCKS_REV=${LOCKS_REV:-$saved_locks}
+  LOCKS_TAG=${LOCKS_TAG:-$saved_locks_tag}
+fi
+
 # Pinned upstream revisions. Paykit Server is pubky/paykit-server#46 (head 0ffd4da, paykit-rs v0.1.0-rc65, the version both apps pin; not merged
 # or released yet, the latest release is rc8): move PAYKIT_SERVER_REV to its merge or release once #46 lands. Its setup flow emits the Pubky
 # grant auth URL (pubkyauth://signin_grant with cid and cpk) that the apps' Paykit SDK requires.
@@ -21,7 +31,8 @@ SOURCES=.marketplace/sources
 # Compose reads these for the Paykit Server and driver image tags and labels.
 export PAYKIT_SERVER_REV PAYKIT_RS_REV PAYKIT_SERVER_TAG="${PAYKIT_SERVER_REV:0:7}"
 # The driver's `paykit-key-authorization` comes from the payment request fixture built on the same paykit-rs (v0.1.0-rc65 -> rc65-shared).
-export PAYKIT_FIXTURE_TAG="${PAYKIT_RS_TAG##*-}-shared"
+paykit_version="${PAYKIT_RS_TAG#v}"
+export PAYKIT_FIXTURE_TAG="${paykit_version##*-}-shared"
 FIXTURE_IMAGE=bitkit-docker/payment-request-fixture:$PAYKIT_FIXTURE_TAG
 PAYKIT_SERVER_PATCHES=$(cd marketplace/patches 2>/dev/null && ls paykit-server-*.patch 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
 export PAYKIT_SERVER_PATCHES
@@ -50,6 +61,7 @@ Fixture:
     seed [--buyer headless|none]       Mine to maturity, create the seller wallet and identity, complete the
                                        watch-only setup, optionally create a headless buyer
     info                               Public fixture facts: homeserver key, seller, buyer, ports
+    pins                               Public source revisions and the selected fixture image tag
     setup-url [--serial <adb-serial>]  New watch-only setup auth URL for a Bitkit wallet to approve; --serial
                                        adds -s <serial> to the printed adb command (needed with several devices)
     setup-wait <flow>                  Wait until an approved setup flow completes; with a Bitkit seller
@@ -59,6 +71,9 @@ Fixture:
                                        seller wallet to approve, with the Android and iOS handoff, wait for it
                                        and keep the grant session for purchase --seller bitkit. Prints one JSON
                                        object per line: awaiting_approval first, approved last
+    seller-auth-start <operation> [--timeout <seconds>] [--serial <adb-serial>] [--relay <url>]
+                                       Start one owned grant listener without waiting for device approval
+    seller-auth-status <operation>      Poll that listener for its auth URL or final approval; never restart it
     fund <address> [sats]              Send regtest coins (default 1000000 sats) and mine one block
     peers [--seller headless|bitkit|<pubky>] [--buyer <pubky>] [--bundle <id>] [--wait <seconds>]
                                        Report the seller and buyer as linked peers: receiver markers, setup
@@ -70,7 +85,9 @@ Purchase:
     receive <bundle>                   Headless buyer: receive the Payment Request and validate it
     pay <bundle>                       Headless buyer: pay the derived address from the regtest wallet
     status <bundle>                    Signed Paykit status and purchase state
-    mine [--bundle <id>] [--address <bcrt1...>]
+    request-info <bundle> <request-uuid>
+                                       Read the delivered native request's authenticated SDK handoff metadata
+    mine [--bundle <id>] [--address <bcrt1...>] [--txid <native-txid>]
                                        Mine exactly one block; print height, hash and the purchase transaction.
                                        --address names the payout address of a Bitkit seller's purchase
     wait <bundle> <detected|confirmed> [seconds]
@@ -105,12 +122,31 @@ ensure_sources() {
   else
     apply_paykit_server_patches >&2 # a patch added since the checkout
   fi
+  select_lock_policy
+}
+
+select_lock_policy() {
+  MARKETPLACE_LOCK_POLICY=$(python3 scripts/marketplace-policy.py "$SOURCES/locks/locks-core/src/lock_policy.rs")
+  MARKETPLACE_DRIVER_SOURCE=$(python3 scripts/marketplace-driver-source.py marketplace/driver)
+  export MARKETPLACE_LOCK_POLICY MARKETPLACE_DRIVER_SOURCE
+}
+
+driver_matches() {
+  local expected actual
+  expected=$(python3 scripts/marketplace-driver-source.py marketplace/driver) || return 1
+  actual=$(docker image inspect --format '{{ index .Config.Labels "tech.masivo.marketplace-driver-source" }} {{ index .Config.Labels "tech.masivo.paykit-rs" }} {{ index .Config.Labels "tech.masivo.paykit-server" }}' "$DRIVER_IMAGE" 2>/dev/null) || return 1
+  [ "$actual" = "$expected $PAYKIT_RS_REV $PAYKIT_SERVER_REV" ]
+}
+
+require_driver() {
+  driver_matches || { echo "Marketplace driver image is stale; run ./pubky-marketplace build-paykit" >&2; return 1; }
 }
 
 # The driver runs as root inside its container (it owns the root-only state volume). It hands the files it
 # writes to the host mounts (.marketplace/evidence) to the calling user, so the host can remove them later.
 driver() {
   ensure_sources
+  require_driver
   mkdir -p .marketplace/evidence
   compose run --rm --no-deps --quiet-build -T \
     -e MARKETPLACE_HOST_UID="$(id -u)" -e MARKETPLACE_HOST_GID="$(id -g)" marketplace-driver "$@"
@@ -152,9 +188,8 @@ fetch_pinned() {
 # Dockerfile.local swaps those for the checkouts below. Fail here, before a long build, if the lock does not resolve to our pins.
 check_lock_pins() {
   local lock="$SOURCES/paykit-server/Cargo.lock"
-  if ! grep -Fq -e "source = \"git+https://github.com/pubky/paykit-rs.git?tag=$PAYKIT_RS_TAG#$PAYKIT_RS_REV\"" \
-    -e "source = \"git+https://github.com/pubky/paykit-rs.git?rev=$PAYKIT_RS_REV#$PAYKIT_RS_REV\"" "$lock" ||
-    ! grep -Fq "source = \"git+https://github.com/pubky/locks.git?tag=$LOCKS_TAG#$LOCKS_REV\"" "$lock"; then
+  if ! python3 scripts/paykit-lock.py --lock "$lock" --paykit-rev "$PAYKIT_RS_REV" \
+    --locks-rev "$LOCKS_REV" --locks-tag "$LOCKS_TAG" --cache .marketplace/provenance > .marketplace/server-alignment.json; then
     echo "$lock does not lock paykit-rs $PAYKIT_RS_REV and locks $LOCKS_REV" >&2
     exit 1
   fi
@@ -190,11 +225,12 @@ fetch_sources() {
   fetch_pinned https://github.com/pubky/paykit-rs.git "$SOURCES/paykit-rs" "$PAYKIT_RS_REV"
   fetch_pinned https://github.com/pubky/locks.git "$SOURCES/locks" "$LOCKS_REV"
   check_lock_pins
+  select_lock_policy
 }
 
 # The payment request fixture image on PAYKIT_RS_REV, built when missing (its Dockerfile moves the fixture's paykit-rs and Pubky pins).
 ensure_fixture() {
-  docker image inspect "$FIXTURE_IMAGE" >/dev/null 2>&1 && return 0
+  fixture_matches && return 0
   progress "building $FIXTURE_IMAGE on paykit-rs ${PAYKIT_RS_REV:0:8}"
   if docker buildx version >/dev/null 2>&1; then
     docker build -q -f payment-requests/Dockerfile --build-arg "PAYKIT_RS_REV=$PAYKIT_RS_REV" -t "$FIXTURE_IMAGE" payment-requests
@@ -202,6 +238,14 @@ ensure_fixture() {
     sed -E -e 's/^RUN --mount=[^ ]+ \\/RUN \\/' -e '/^[[:space:]]+--mount=/d' payment-requests/Dockerfile |
       docker build -q -f - --build-arg "PAYKIT_RS_REV=$PAYKIT_RS_REV" -t "$FIXTURE_IMAGE" payment-requests
   fi
+  fixture_matches || { echo "Built fixture does not match paykit-rs $PAYKIT_RS_REV" >&2; exit 1; }
+}
+
+fixture_matches() {
+  local actual
+  docker image inspect "$FIXTURE_IMAGE" >/dev/null 2>&1 || return 1
+  actual=$(docker run --rm --entrypoint cat "$FIXTURE_IMAGE" /usr/local/share/paykit-rs-rev 2>/dev/null) || return 1
+  [ "$actual" = "$PAYKIT_RS_REV" ]
 }
 
 # Paykit Server and the driver, which carries its helpers and the payment request fixture's `paykit-key-authorization` (scripts/follow-app-paykit sets the pins through the environment).
@@ -219,7 +263,6 @@ build_paykit() {
 build() {
   fetch_sources
   # the payment request fixture's image first: the driver copies its `paykit-key-authorization` from it
-  compose build homeserver-proxy
   ensure_fixture
   if docker buildx version >/dev/null 2>&1; then
     compose build pubky-testnet paykit-server
@@ -235,32 +278,17 @@ build() {
 classic_build() {
   docker image inspect bitkit-docker/pubky-testnet:0.14.0 >/dev/null 2>&1 || compose build pubky-testnet
   printf '**/.git\n**/target\n' > "$SOURCES/.dockerignore"
-  python3 - "$SOURCES/paykit-server/Dockerfile.local" "$PAYKIT_SERVER_REV" "$PAYKIT_RS_REV" "$PAYKIT_SERVER_PATCHES" > "$SOURCES/Dockerfile.classic" <<'PY'
-import re, sys
-text, server, paykit, patches = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3], sys.argv[4]
-text = re.sub(r"^# syntax=.*\n", "", text)
-copies = "\n".join([
-    "COPY paykit-rs/paykit-lib /build/paykit-rs/paykit-lib",
-    "COPY paykit-rs/paykit-sdk /build/paykit-rs/paykit-sdk",
-    "COPY locks/Cargo.toml locks/Cargo.lock /build/locks/",
-] + [f"COPY locks/{crate} /build/locks/{crate}" for crate in ("locks-core", "locks-service", "locks-server", "locks-sdk", "locks-e2e")])
-text, named = re.subn(r"RUN --mount=from=paykit-lib.*?/build/locks/\n", copies + "\n", text, flags=re.S)
-text, server_copy = re.subn(r"^COPY \. /build/paykit-server$", "COPY paykit-server /build/paykit-server", text, flags=re.M)
-text = re.sub(r"RUN --mount=type=cache[^\n]*\\\n(\s+--mount=type=cache[^\n]*\\\n)*", "RUN ", text)
-if named != 1 or server_copy != 1 or "--mount" in text:
-    sys.exit("Dockerfile.local changed shape; update classic_build")
-print(text + f'\nLABEL tech.masivo.paykit-server="{server}" tech.masivo.paykit-rs="{paykit}" tech.masivo.paykit-server-patches="{patches}"')
-PY
+  python3 scripts/paykit-classic-dockerfile.py "$SOURCES/paykit-server/Dockerfile.local" "$PAYKIT_SERVER_REV" "$PAYKIT_RS_REV" "$PAYKIT_SERVER_PATCHES" > "$SOURCES/Dockerfile.classic"
   docker build -q -f "$SOURCES/Dockerfile.classic" -t "$PAYKIT_SERVER_IMAGE" "$SOURCES"
   { sed -e "s|^COPY --from=paykit |COPY --from=$PAYKIT_SERVER_IMAGE |" -e "s|^COPY --from=fixture |COPY --from=$FIXTURE_IMAGE |" marketplace/driver/Dockerfile
-    echo "LABEL tech.masivo.paykit-server=\"$PAYKIT_SERVER_REV\" tech.masivo.paykit-rs=\"$PAYKIT_RS_REV\""; } > marketplace/driver/.Dockerfile.classic
+    echo "LABEL tech.masivo.paykit-server=\"$PAYKIT_SERVER_REV\" tech.masivo.paykit-rs=\"$PAYKIT_RS_REV\" tech.masivo.marketplace-driver-source=\"$MARKETPLACE_DRIVER_SOURCE\""; } > marketplace/driver/.Dockerfile.classic
   docker build -q -f marketplace/driver/.Dockerfile.classic -t "$DRIVER_IMAGE" marketplace/driver
   rm -f marketplace/driver/.Dockerfile.classic
 }
 
 images_present() {
   docker image inspect bitkit-docker/pubky-testnet:0.14.0 "$PAYKIT_SERVER_IMAGE" \
-    "$DRIVER_IMAGE" bitkit-docker/payment-request-fixture:rc65-shared "$FIXTURE_IMAGE" >/dev/null 2>&1
+    "$DRIVER_IMAGE" "$FIXTURE_IMAGE" >/dev/null 2>&1 && fixture_matches && driver_matches
 }
 
 wait_ready() {
@@ -300,6 +328,7 @@ up() {
 down() {
   local project
   project="$(project_name)"
+  python3 scripts/marketplace-auth.py --project "$project" --image "$DRIVER_IMAGE" cleanup
   progress "removing the fixture and payment request containers"
   # The peers run in the testnet's namespace and hold identities from it, so they go with it. Their profile is
   # only named here so that rm reaches them; it does nothing when they were never created.
@@ -317,6 +346,14 @@ fi
 
 command="$1"
 shift
+
+if [ "$command" = pins ]; then
+  python3 - "$PAYKIT_SERVER_REV" "$PAYKIT_RS_REV" "$PAYKIT_RS_TAG" "$LOCKS_REV" "$LOCKS_TAG" "$PAYKIT_FIXTURE_TAG" <<'PY'
+import json, sys
+print(json.dumps(dict(zip(('serverRevision', 'paykitRevision', 'paykitTag', 'locksRevision', 'locksTag', 'fixtureTag'), sys.argv[1:]))))
+PY
+  exit 0
+fi
 
 # Without buildx, compose falls back to the classic builder but says so on every run. That line lands on stderr
 # and breaks `2>&1 | jq`. Set COMPOSE_BAKE yourself to keep it as it is.
@@ -340,6 +377,18 @@ case "$command" in
     down
     up
     progress "reset: done; seed next"
+    ;;
+  seller-auth-start)
+    ensure_sources
+    require_driver
+    mkdir -p .marketplace/evidence
+    python3 scripts/marketplace-auth.py --project "$(project_name)" --image "$DRIVER_IMAGE" start "$@"
+    ;;
+  seller-auth-status)
+    python3 scripts/marketplace-auth.py --project "$(project_name)" --image "$DRIVER_IMAGE" status "$@"
+    ;;
+  request-info)
+    python3 scripts/marketplace-request-info.py "$@"
     ;;
   seed | info | setup-url | setup-wait | seller-auth | fund | peers | purchase | receive | pay | status | mine | wait | verify | verify-bitkit-seller)
     driver "$command" "$@"
