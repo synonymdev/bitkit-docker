@@ -22,9 +22,18 @@ fill FAUCET_AUTH "faucet:$(rand)"
 
 if grep -q '^LDK_BACKUP_SECRET_KEY=$' .env; then
   key=$(openssl ecparam -name secp256k1 -genkey -noout)
-  fill LDK_BACKUP_SECRET_KEY "$(echo "$key" | openssl ec -text -noout 2>/dev/null | sed -n '/priv:/,/pub:/p' | grep -v -e priv -e pub | tr -d ' :\n' | tail -c 64)"
-  sed -i.bak '/^LDK_BACKUP_PUBLIC_KEY=/d' .env && rm -f .env.bak
-  echo "LDK_BACKUP_PUBLIC_KEY=$(echo "$key" | openssl ec -pubout -conv_form compressed -outform DER 2>/dev/null | tail -c 33 | xxd -p -c 33)" >> .env
+  secret=$(echo "$key" | openssl ec -outform DER 2>/dev/null | od -An -v -tx1 -j7 -N32 | tr -d ' \n')
+  public=$(echo "$key" | openssl ec -pubout -conv_form compressed -outform DER 2>/dev/null | od -An -v -tx1 -j23 -N33 | tr -d ' \n')
+  if [ ${#secret} -ne 64 ] || [ ${#public} -ne 66 ]; then
+    echo "could not derive the backup server key pair" >&2
+    exit 1
+  fi
+  fill LDK_BACKUP_SECRET_KEY "$secret"
+  fill LDK_BACKUP_PUBLIC_KEY "$public"
+fi
+if ! grep -Eq '^LDK_BACKUP_PUBLIC_KEY=[0-9a-f]{66}$' .env; then
+  echo "LDK_BACKUP_PUBLIC_KEY is missing; clear LDK_BACKUP_SECRET_KEY in .env and rerun" >&2
+  exit 1
 fi
 
 if [ ! -f secrets/jwt-private.pem ]; then
