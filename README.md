@@ -1058,6 +1058,17 @@ and its existing Maven authentication. No local-AAR substitute is needed.
 The test run owns app installation, MAX review and deadline-expiry proof on its
 lane's devices. No device is launched on the coordinator.
 
+## Public staging
+
+`staging/` deploys Bitkit's public regtest staging without Blocktank: VSS, LNURL-auth, a regtest bitcoind, mempool and its electrs (explorer, Esplora REST and Electrum over TLS), a faucet and miner at Blocktank's `/regtest/chain/deposit` and `mine` paths, the fx-rates relay and the RN backup server, behind one Caddy. It keeps `*.stag0.blocktank.to`'s paths, so apps and tests switch by host.
+
+```bash
+cd staging && ./init.sh   # .env and keys; then set the hostnames in .env
+docker compose up -d --build
+```
+
+[docs/staging.md](docs/staging.md) has the endpoints, what Bitkit still calls on stag0, the settings to change, the migration checklist and smoke checks.
+
 ## Production Considerations
 
 Do not use for production. Bitkit Dev server is vibe-coded and not optimised.
