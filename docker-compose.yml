@@ -5,6 +5,10 @@
 # ports. README "Ports" lists the map.
 x-trezor-user-env-image: &trezor_user_env_image ghcr.io/trezor/trezor-user-env@sha256:15871ebb234bf7c0197cfcd31ddc2edbe90173cd6386fc0283fafe05bf888c06
 
+# The `spark` profile: a local Spark regtest network on this chain (docs/spark-regtest.md).
+include:
+  - spark-regtest/compose.yml
+
 services:
   bitcoind:
     container_name: bitcoin

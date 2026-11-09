@@ -1,0 +1,25 @@
+diff --git a/spark/so/handler/tree_query_handler.go b/spark/so/handler/tree_query_handler.go
+index 1138acb..0c15a79 100644
+--- a/spark/so/handler/tree_query_handler.go
++++ b/spark/so/handler/tree_query_handler.go
+@@ -126,13 +126,15 @@ func (h *TreeQueryHandler) QueryNodes(ctx context.Context, req *pb.QueryNodesReq
+ 	}
+ 
+ 	if len(req.GetStatuses()) > 0 {
+-		statuses := make([]st.TreeNodeStatus, len(req.GetStatuses()))
+-		for i, stat := range req.GetStatuses() {
+-			var err error
+-			statuses[i], err = ent.TreeNodeStatusSchema(stat)
++		// bitkit-docker: newer clients also ask for statuses this operator never stores
++		// (TREE_NODE_STATUS_RETURNED); they match no node here, so skip them.
++		statuses := make([]st.TreeNodeStatus, 0, len(req.GetStatuses()))
++		for _, stat := range req.GetStatuses() {
++			status, err := ent.TreeNodeStatusSchema(stat)
+ 			if err != nil {
+-				return nil, fmt.Errorf("invalid transfer status: %w", err)
++				continue
+ 			}
++			statuses = append(statuses, status)
+ 		}
+ 		query = query.Where(treenode.StatusIn(statuses...))
+ 	}
