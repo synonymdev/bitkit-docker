@@ -79,6 +79,10 @@ down)
   "${COMPOSE[@]}" stop $(spark_services)
   ;;
 reset)
+  # The config is written by a root container, which a Linux host user cannot delete, so a container deletes it.
+  if [[ -d spark-regtest/data ]]; then
+    "${COMPOSE[@]}" run --rm --no-deps --entrypoint sh spark-init -c 'rm -rf /out/*'
+  fi
   # shellcheck disable=SC2046
   "${COMPOSE[@]}" rm -sf $(spark_services)
   project=$("${COMPOSE[@]}" config --format json | jq -r .name)
