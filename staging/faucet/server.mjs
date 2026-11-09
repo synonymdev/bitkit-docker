@@ -2,6 +2,7 @@
 //   POST /regtest/chain/deposit {address, amountSat?} -> txid as plain text (default 100,000 sats)
 //   POST /regtest/chain/mine {count?}                 -> JSON array of block hashes (default 1)
 //   GET  /health                                       -> {height, balanceSat}
+// With FAUCET_AUTH=user:password set, deposit and mine need that HTTP basic auth.
 import http from 'node:http';
 
 const env = process.env;
@@ -11,6 +12,7 @@ const WALLET = env.FAUCET_WALLET ?? 'faucet';
 const DEFAULT_SAT = Number(env.FAUCET_DEFAULT_SAT ?? 100_000);
 const MAX_SAT = Number(env.FAUCET_MAX_SAT ?? 10_000_000);
 const MAX_BLOCKS = Number(env.FAUCET_MAX_BLOCKS ?? 100);
+const FAUCET_AUTH = env.FAUCET_AUTH ? 'Basic ' + Buffer.from(env.FAUCET_AUTH).toString('base64') : null;
 
 async function rpc(method, params = [], wallet = WALLET) {
   const url = wallet ? `${RPC_URL}/wallet/${wallet}` : RPC_URL;
@@ -79,7 +81,9 @@ http.createServer(async (req, res) => {
   const path = new URL(req.url, 'http://x').pathname.replace(/^\/blocktank\/api\/v2/, '');
   const route = routes[`${req.method} ${path}`];
   let [status, out] = [404, 'not found'];
-  if (route) {
+  if (route && FAUCET_AUTH && req.method === 'POST' && req.headers.authorization !== FAUCET_AUTH) {
+    [status, out] = [401, 'unauthorized'];
+  } else if (route) {
     const body = await readJson(req);
     try {
       [status, out] = body === null ? [400, 'invalid JSON'] : await route(body);

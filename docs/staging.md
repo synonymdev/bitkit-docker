@@ -20,7 +20,7 @@ Spark is not hosted here: staging builds and CI use Lightspark's hosted regtest 
 | `ssl://<electrum-host>:9999` | Electrum | `electrs` (mempool's electrs fork) through Caddy's TLS |
 | — | Regtest chain | `bitcoind` (RPC stays on the compose network) |
 
-Faucet contract, as the E2E scripts call it:
+Faucet contract, as the E2E scripts call it. With `FAUCET_AUTH` set (`init.sh` generates it), `deposit` and `mine` need that HTTP basic auth. An open `mine` endpoint is what flooded stag0's chain.
 
 - `POST /regtest/chain/deposit {"address": "bcrt1…", "amountSat": 50000}` returns the txid as plain text. `amountSat` defaults to 100,000 and is capped by `FAUCET_MAX_SAT`.
 - `POST /regtest/chain/mine {"count": 6}` returns the block hashes. `count` defaults to 1 and is capped by `FAUCET_MAX_BLOCKS`.
@@ -64,6 +64,7 @@ Phase 1 needs none of these: the stag0 names point at the new stack. Phase 2 cha
 | bitkit-android | `ldkRgsServerUrl`, `ldkScorerUrl`, `blocktankApiUrl` (regtest) | none (drop with LDK and Blocktank) |
 | bitkit-ios | the same `Env` values | as above |
 | bitkit-e2e-tests | `BLOCKTANK_URL` default (`test/helpers/constants.ts`, `scripts/*.sh`, seedkit), `regtest-mine.yml` inputs | `https://<staging-host>` |
+| bitkit-e2e-tests, bitkit-android, bitkit-ios | faucet callers (deposit, mine, the nightly miner) | send `FAUCET_AUTH` as basic auth, from a repository secret |
 | bitkit-e2e-tests | `ELECTRUM_HOST` default, seedkit Electrum, `MEMPOOL_SERVER` | `<electrum-host>`, `https://<mempool-host>` |
 | bitkit-core | onchain test Electrum URLs | `ssl://<electrum-host>:9999` |
 | bitkit-docker | marketplace driver `MARKETPLACE_ELECTRUM` default and regtest URL, docs | `ssl://<electrum-host>:9999`, `https://<staging-host>/regtest` |
@@ -77,7 +78,7 @@ Phase 1, DevOps, no app release:
 1. Deploy the stack below on a new host, with `STAGING_HOST=bitkit.stag0.blocktank.to`, `MEMPOOL_HOST=mempool.bitkit.stag0.blocktank.to` and `ELECTRUM_HOST=electrs.bitkit.stag0.blocktank.to`.
 2. Copy stag0's data in, with stag0 stopped for writes:
    - VSS: dump stag0's `vss_db` table and restore it into `vss-db`.
-   - Chain: copy stag0 bitcoind's regtest `blocks` and `chainstate` into the `bitcoin` volume, so staging wallets keep their balances. stag0's bitcoind must not be newer than the stack's (26.0), or the copy may not open. Electrs reindexes on start. Skipping this starts a new chain and wipes every staging on-chain balance.
+   - Chain: a fresh chain is the clean start, but it wipes every staging on-chain balance. stag0's chain has grown by about 30k junk blocks a day since an open `mine` call on 7 Nov. To keep balances anyway, copy stag0 bitcoind's regtest `blocks` and `chainstate` into the `bitcoin` volume. stag0's bitcoind must not be newer than the stack's (26.0), or the copy may not open. Electrs reindexes on start.
    - Faucet funds: regtest block rewards reach zero near height 4950, so on a copied chain past that, mining no longer funds the faucet. Move a large balance from stag0's faucet wallet to the new faucet (`GET /health` after start, then send to a `getnewaddress` of its `faucet` wallet), or copy that wallet in and set `FAUCET_WALLET` to its name.
    - RN backups: copy stag0's backup server storage into the `ldk-backup` volume, and put stag0's backup server key pair in `.env`.
 3. Point those three names at the new host and run the smoke checks.
@@ -112,8 +113,8 @@ docker compose up -d --build
 ```bash
 H=https://<staging-host>
 curl -s $H/health                                                              # {"height":…,"balanceSat":…}
-curl -s -X POST $H/regtest/chain/deposit -H 'Content-Type: application/json' -d '{"address":"bcrt1…"}'   # txid
-curl -s -X POST $H/regtest/chain/mine -H 'Content-Type: application/json' -d '{"count":1}'
+curl -s -u "$FAUCET_AUTH" -X POST $H/regtest/chain/deposit -H 'Content-Type: application/json' -d '{"address":"bcrt1…"}'   # txid
+curl -s -u "$FAUCET_AUTH" -X POST $H/regtest/chain/mine -H 'Content-Type: application/json' -d '{"count":1}'
 curl -s https://<mempool-host>/api/blocks/tip/height
 curl -s $H/electrs/blocks/tip/hash
 curl -s $H/fx/rates/btc | head -c 100
@@ -121,7 +122,7 @@ curl -s $H/lnurl_auth/auth                                                     #
 openssl s_client -connect <electrum-host>:9999 -servername <electrum-host> </dev/null 2>/dev/null | head -1
 ```
 
-The E2E scripts work unchanged against it: `BLOCKTANK_URL=$H ./scripts/fund-address.sh bcrt1… 50000` and `BLOCKTANK_URL=$H ./scripts/mine-blocks.sh 6`.
+With `FAUCET_AUTH` empty, the E2E scripts work unchanged against it: `BLOCKTANK_URL=$H ./scripts/fund-address.sh bcrt1… 50000` and `BLOCKTANK_URL=$H ./scripts/mine-blocks.sh 6`. With it set, add `-u "$FAUCET_AUTH"` to the faucet `curl` calls.
 
 ## Operate
 

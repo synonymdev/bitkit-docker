@@ -18,6 +18,7 @@ fill BITCOIN_RPC_PASSWORD "$(rand)"
 fill VSS_DB_PASSWORD "$(rand)"
 fill MEMPOOL_DB_PASSWORD "$(rand)"
 fill MEMPOOL_DB_ROOT_PASSWORD "$(rand)"
+fill FAUCET_AUTH "faucet:$(rand)"
 
 if grep -q '^LDK_BACKUP_SECRET_KEY=$' .env; then
   key=$(openssl ecparam -name secp256k1 -genkey -noout)
