@@ -53,25 +53,28 @@ wait_for_chain_sync() {
 }
 
 # The wallet funds the SSP and the faucet. It is loaded on startup once created.
-# bitkit-docker: its keys are fixed (SPARK_WALLET_TPRV) and imported from the chain's start, so after ./spark reset the
-# new wallet holds what the last one held, and the shared chain's coins are not spent one reset at a time.
+# bitkit-docker: its keys are fixed (SPARK_WALLET_TPRV) and the chain is rescanned for them on every start, so after
+# ./spark reset the new wallet holds what the last one held, and the shared chain's coins are not spent one reset at a
+# time. A rescan cut short by a stop is redone on the next start.
 ensure_wallet() {
   : "${SPARK_WALLET_TPRV:?}"
   if ! rpc listwallets | jq -e 'index("default")' >/dev/null && ! rpc loadwallet '["default"]' >/dev/null 2>&1; then
     rpc createwallet '["default", false, true, "", false, true, true]' >/dev/null
   fi
-  # A wallet whose import was cut short holds no keys, so the import runs again (it is idempotent).
-  rpc listdescriptors '[]' default | jq -e '.descriptors | length > 0' >/dev/null && return 0
-  _requests=""
-  for _branch in 0 1; do
-    _descriptor="wpkh($SPARK_WALLET_TPRV/84h/1h/0h/$_branch/*)"
-    _checksum=$(rpc getdescriptorinfo "[\"$_descriptor\"]" | jq -r .checksum)
-    _internal=false
-    [ "$_branch" = 1 ] && _internal=true
-    _requests="$_requests{\"desc\":\"$_descriptor#$_checksum\",\"timestamp\":0,\"active\":true,\"internal\":$_internal,\"range\":[0,4999]},"
-  done
-  log "importing the wallet's keys and scanning the chain for its coins"
-  rpc importdescriptors "[[${_requests%,}]]" default | jq -e 'all(.success)' >/dev/null
+  if ! rpc listdescriptors '[]' default | jq -e '.descriptors | length > 0' >/dev/null; then
+    _requests=""
+    for _branch in 0 1; do
+      _descriptor="wpkh($SPARK_WALLET_TPRV/84h/1h/0h/$_branch/*)"
+      _checksum=$(rpc getdescriptorinfo "[\"$_descriptor\"]" | jq -r .checksum)
+      _internal=false
+      [ "$_branch" = 1 ] && _internal=true
+      _requests="$_requests{\"desc\":\"$_descriptor#$_checksum\",\"timestamp\":\"now\",\"active\":true,\"internal\":$_internal,\"range\":[0,4999]},"
+    done
+    log "importing the wallet's keys"
+    rpc importdescriptors "[[${_requests%,}]]" default | jq -e 'all(.success)' >/dev/null
+  fi
+  log "scanning the chain for the wallet's coins"
+  rpc rescanblockchain '[0]' default >/dev/null
 }
 
 ssp_cli() {
