@@ -2,7 +2,8 @@
 //   POST /regtest/chain/deposit {address, amountSat?} -> txid as plain text (default 100,000 sats)
 //   POST /regtest/chain/mine {count?}                 -> JSON array of block hashes (default 1)
 //   GET  /health                                       -> {height, balanceSat}
-// With FAUCET_AUTH=user:password set, deposit and mine need that HTTP basic auth.
+// deposit and mine need FAUCET_AUTH (user:password) as HTTP basic auth, and each client gets
+// FAUCET_RATE_PER_MIN of them a minute. The faucet refuses to start without FAUCET_AUTH.
 import http from 'node:http';
 
 const env = process.env;
@@ -12,7 +13,24 @@ const WALLET = env.FAUCET_WALLET ?? 'faucet';
 const DEFAULT_SAT = Number(env.FAUCET_DEFAULT_SAT ?? 100_000);
 const MAX_SAT = Number(env.FAUCET_MAX_SAT ?? 10_000_000);
 const MAX_BLOCKS = Number(env.FAUCET_MAX_BLOCKS ?? 100);
-const FAUCET_AUTH = env.FAUCET_AUTH ? 'Basic ' + Buffer.from(env.FAUCET_AUTH).toString('base64') : null;
+if (!env.FAUCET_AUTH) throw new Error('FAUCET_AUTH (user:password) is required');
+const FAUCET_AUTH = 'Basic ' + Buffer.from(env.FAUCET_AUTH).toString('base64');
+const RATE_PER_MIN = Number(env.FAUCET_RATE_PER_MIN ?? 20);
+const hits = new Map(); // client -> request times in the last minute
+
+// Caddy sets X-Forwarded-For to the client it sees, so the header names the caller
+function limited(req) {
+  const client = req.headers['x-forwarded-for'] ?? req.socket.remoteAddress;
+  const now = Date.now();
+  const recent = (hits.get(client) ?? []).filter((t) => now - t < 60_000);
+  recent.push(now);
+  hits.set(client, recent);
+  return recent.length > RATE_PER_MIN;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [client, times] of hits) if (times.every((t) => now - t >= 60_000)) hits.delete(client);
+}, 60_000).unref();
 
 async function rpc(method, params = [], wallet = WALLET) {
   const url = wallet ? `${RPC_URL}/wallet/${wallet}` : RPC_URL;
@@ -81,8 +99,10 @@ http.createServer(async (req, res) => {
   const path = new URL(req.url, 'http://x').pathname.replace(/^\/blocktank\/api\/v2/, '');
   const route = routes[`${req.method} ${path}`];
   let [status, out] = [404, 'not found'];
-  if (route && FAUCET_AUTH && req.method === 'POST' && req.headers.authorization !== FAUCET_AUTH) {
+  if (route && req.method === 'POST' && req.headers.authorization !== FAUCET_AUTH) {
     [status, out] = [401, 'unauthorized'];
+  } else if (route && req.method === 'POST' && limited(req)) {
+    [status, out] = [429, `at most ${RATE_PER_MIN} requests a minute`];
   } else if (route) {
     const body = await readJson(req);
     try {

@@ -20,7 +20,7 @@ Spark is not hosted here: staging builds and CI use Lightspark's hosted regtest 
 | `ssl://<electrum-host>:9999` | Electrum | `electrs` (mempool's electrs fork) through Caddy's TLS |
 | — | Regtest chain | `bitcoind` (RPC stays on the compose network) |
 
-Faucet contract, as the E2E scripts call it. With `FAUCET_AUTH` set (`init.sh` generates it), `deposit` and `mine` need that HTTP basic auth. An open `mine` endpoint is what flooded stag0's chain.
+Faucet contract, as the E2E scripts call it. `deposit` and `mine` need `FAUCET_AUTH` as HTTP basic auth: `init.sh` generates it, callers keep it as a CI secret, and the faucet refuses to start without it. Each client gets `FAUCET_RATE_PER_MIN` calls a minute (default 20, then `429`), on top of the per-call caps below. stag0's open `mine` endpoint is what stalled its chain, Electrum and VSS.
 
 - `POST /regtest/chain/deposit {"address": "bcrt1…", "amountSat": 50000}` returns the txid as plain text. `amountSat` defaults to 100,000 and is capped by `FAUCET_MAX_SAT`.
 - `POST /regtest/chain/mine {"count": 6}` returns the block hashes. `count` defaults to 1 and is capped by `FAUCET_MAX_BLOCKS`.
@@ -34,7 +34,7 @@ Default branches of bitkit-android, bitkit-ios, bitkit-core, bitkit-e2e-tests an
 | --- | --- | --- | --- | --- |
 | `bitkit.stag0…/vss_rs_auth` | android `Env.vssServerUrl`, ios `Env.vssServerUrl` | VSS | must stay | `/vss_rs_auth` |
 | `bitkit.stag0…/lnurl_auth/auth` | android and ios `lnurlAuthServerUrl` | LNURL-auth for VSS | must stay | `/lnurl_auth/auth` |
-| `bitkit.stag0…/fx/rates/btc` | android and ios `btcRatesServer` (regtest, testnet, signet) | fx rates | stays (production FX stays) | `/fx/rates/btc` |
+| `bitkit.stag0…/fx/rates/btc` | android and ios `btcRatesServer` (regtest, testnet, signet) | fx rates | stays (production FX stays) | `/fx/rates/btc`, relayed read-only from production's FX feed (`FX_UPSTREAM_ORIGIN`) |
 | `ssl://electrs.bitkit.stag0…:9999` | android `ElectrumServers.REGTEST.STAG`, ios `electrumServerUrl`; e2e `ELECTRUM_HOST` default and seedkit; bitkit-core onchain tests; android `scripts/electrum-bridge.py` and journeys; bitkit-docker marketplace driver and docs | Electrum | must stay | `ssl://<electrum-host>:9999` |
 | `ssl://fulcrum.bitkit.stag0…:18484` | bitkit-core onchain tests | Electrum (Fulcrum) | must stay | `ssl://<electrum-host>:9999` |
 | `mempool.bitkit.stag0…` | android and ios `blockExplorerUrl`; e2e `regtest-mine.yml` tip check | explorer, chain API | must stay | `https://<mempool-host>` |
@@ -55,7 +55,7 @@ Spark on Lightspark's hosted regtest uses Lightspark's chain, while the apps' on
 
 ## Settings to change
 
-Phase 1 needs none of these: the stag0 names point at the new stack. Phase 2 changes them to the new names.
+Every caller moves to the new names; nothing keeps a stag0 name.
 
 | Repository | Setting | Value |
 | --- | --- | --- |
@@ -71,24 +71,14 @@ Phase 1 needs none of these: the stag0 names point at the new stack. Phase 2 cha
 
 ## Migration checklist
 
-A wallet's VSS identity comes from the LNURL-auth host: the app derives its linking key from the domain in the LNURL. Existing staging wallets keep their backups only when the auth host keeps its name and the VSS data is copied. So the move has two phases.
+The new staging is a fresh build: nothing comes from stag0, neither images, configs nor data. It gets new hostnames off `blocktank.to`, new credentials, and auth on every write endpoint. stag0 may have been compromised, so none of its state is reused.
 
-Phase 1, DevOps, no app release:
-
-1. Deploy the stack below on a new host, with `STAGING_HOST=bitkit.stag0.blocktank.to`, `MEMPOOL_HOST=mempool.bitkit.stag0.blocktank.to` and `ELECTRUM_HOST=electrs.bitkit.stag0.blocktank.to`.
-2. Copy stag0's data in, with stag0 stopped for writes:
-   - VSS: dump stag0's `vss_db` table and restore it into `vss-db`.
-   - Chain: a fresh chain is the clean start, but it wipes every staging on-chain balance. stag0's chain has grown by about 30k junk blocks a day since an open `mine` call on 7 Nov. To keep balances anyway, copy stag0 bitcoind's regtest `blocks` and `chainstate` into the `bitcoin` volume. stag0's bitcoind must not be newer than the stack's (26.0), or the copy may not open. Electrs reindexes on start.
-   - Faucet funds: regtest block rewards reach zero near height 4950, so on a copied chain past that, mining no longer funds the faucet. Move a large balance from stag0's faucet wallet to the new faucet (`GET /health` after start, then send to a `getnewaddress` of its `faucet` wallet), or copy that wallet in and set `FAUCET_WALLET` to its name.
-   - RN backups: copy stag0's backup server storage into the `ldk-backup` volume, and put stag0's backup server key pair in `.env`.
-3. Point those three names at the new host and run the smoke checks.
-4. The E2E faucet calls go to `api.stag0.blocktank.to/blocktank/api/v2/regtest/chain/*`: route that path to the new host's same path, or set the E2E `BLOCKTANK_URL` defaults to `https://bitkit.stag0.blocktank.to` now. The rest of `api.stag0` (LSP, RGS, scorer) retires with Blocktank.
-
-Phase 2, when the `blocktank.to` names go:
-
-1. Set the new names in `.env` and add the stag0 names to their site blocks in `staging/Caddyfile`, so both name sets work for a while.
-2. Ship the settings above in the apps and tests. Staging wallets start with fresh VSS identities on the new auth host. If the released RN app used by the migration E2E has its staging hosts built in, keep `/backups-ldk` and Electrum on the old names until the migration tests stop using it.
-3. Retire the stag0 names.
+1. DevOps: pick the three hostnames, deploy the stack below and run the smoke checks.
+2. DevOps: share `FAUCET_AUTH` with the Bitkit team for the repository secrets.
+3. Bitkit: ship the settings above in the apps, tests and tools, with the faucet callers sending `FAUCET_AUTH`.
+4. Staging wallets start fresh: a new chain, so no stag0 balances, and new VSS identities. The app derives its LNURL-auth linking key from the auth host, so wallets restored on the new host find no stag0 backups. Fund test wallets again from the faucet.
+5. Migration E2E: the released RN app it installs may have stag0's hosts built in. Re-create its fixtures against the new staging, or keep those tests off until they can.
+6. Retire `*.stag0.blocktank.to` once no caller uses it.
 
 ## Deploy
 
@@ -122,11 +112,12 @@ curl -s $H/lnurl_auth/auth                                                     #
 openssl s_client -connect <electrum-host>:9999 -servername <electrum-host> </dev/null 2>/dev/null | head -1
 ```
 
-With `FAUCET_AUTH` empty, the E2E scripts work unchanged against it: `BLOCKTANK_URL=$H ./scripts/fund-address.sh bcrt1… 50000` and `BLOCKTANK_URL=$H ./scripts/mine-blocks.sh 6`. With it set, add `-u "$FAUCET_AUTH"` to the faucet `curl` calls.
+The E2E scripts need only the new `BLOCKTANK_URL` and `-u "$FAUCET_AUTH"` on their faucet `curl` calls (`fund-address.sh`, `mine-blocks.sh`); `test/helpers/regtest.ts` sends the same credentials as an `Authorization: Basic` header.
 
 ## Operate
 
 - Blocks: the faucet mines only on request. The nightly `regtest-mine.yml` in bitkit-e2e-tests keeps the chain moving once it points here.
-- Faucet funds: regtest block rewards halve every 150 blocks and reach zero near height 4950. Below that, mine a batch when `GET /health` shows a low balance. Above it, the faucet lives on what it holds.
+- Faucet funds: regtest block rewards halve every 150 blocks and reach zero near height 4950. Mine a batch while `GET /health` shows a low balance and the chain is below that.
+- Credentials: rotate `FAUCET_AUTH` by editing `.env` and `docker compose up -d faucet`, then update the callers' secret.
 - Upgrades: images are pinned in `staging/compose.yml`. Bump one, then `docker compose up -d --build`.
 - Logs: `docker compose logs -f <service>`.
