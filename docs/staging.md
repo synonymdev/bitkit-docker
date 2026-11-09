@@ -28,7 +28,7 @@ Faucet contract, as the E2E scripts call it:
 
 ## What Bitkit calls on stag0 today
 
-Default branches of bitkit-android, bitkit-ios, bitkit-core, bitkit-e2e-tests and bitkit-docker, including CI workflows. No repository variable or secret holds one of these URLs.
+Default branches of bitkit-android, bitkit-ios, bitkit-core, bitkit-e2e-tests and bitkit-docker, including CI workflows. None of these repositories has Actions variables, and no secret name in bitkit-android, bitkit-ios or bitkit-e2e-tests suggests a URL. Secret values and bitkit-core's secrets are not covered.
 
 | stag0 endpoint | Called from | Serves | After the sunset | New staging |
 | --- | --- | --- | --- | --- |
@@ -77,7 +77,8 @@ Phase 1, DevOps, no app release:
 1. Deploy the stack below on a new host, with `STAGING_HOST=bitkit.stag0.blocktank.to`, `MEMPOOL_HOST=mempool.bitkit.stag0.blocktank.to` and `ELECTRUM_HOST=electrs.bitkit.stag0.blocktank.to`.
 2. Copy stag0's data in, with stag0 stopped for writes:
    - VSS: dump stag0's `vss_db` table and restore it into `vss-db`.
-   - Chain: copy stag0 bitcoind's regtest `blocks` and `chainstate` into the `bitcoin` volume, so staging wallets keep their balances. Electrs reindexes on start. Skipping this starts a new chain and wipes every staging on-chain balance.
+   - Chain: copy stag0 bitcoind's regtest `blocks` and `chainstate` into the `bitcoin` volume, so staging wallets keep their balances. stag0's bitcoind must not be newer than the stack's (26.0), or the copy may not open. Electrs reindexes on start. Skipping this starts a new chain and wipes every staging on-chain balance.
+   - Faucet funds: regtest block rewards reach zero near height 4950, so on a copied chain past that, mining no longer funds the faucet. Move a large balance from stag0's faucet wallet to the new faucet (`GET /health` after start, then send to a `getnewaddress` of its `faucet` wallet), or copy that wallet in and set `FAUCET_WALLET` to its name.
    - RN backups: copy stag0's backup server storage into the `ldk-backup` volume, and put stag0's backup server key pair in `.env`.
 3. Point those three names at the new host and run the smoke checks.
 4. The E2E faucet calls go to `api.stag0.blocktank.to/blocktank/api/v2/regtest/chain/*`: route that path to the new host's same path, or set the E2E `BLOCKTANK_URL` defaults to `https://bitkit.stag0.blocktank.to` now. The rest of `api.stag0` (LSP, RGS, scorer) retires with Blocktank.
@@ -85,7 +86,7 @@ Phase 1, DevOps, no app release:
 Phase 2, when the `blocktank.to` names go:
 
 1. Set the new names in `.env` and add the stag0 names to their site blocks in `staging/Caddyfile`, so both name sets work for a while.
-2. Ship the settings above in the apps and tests. Staging wallets start with fresh VSS identities on the new auth host. The released RN app used by the migration E2E keeps its built-in staging hosts, so keep `/backups-ldk` on the old name until the migration tests stop using it.
+2. Ship the settings above in the apps and tests. Staging wallets start with fresh VSS identities on the new auth host. If the released RN app used by the migration E2E has its staging hosts built in, keep `/backups-ldk` and Electrum on the old names until the migration tests stop using it.
 3. Retire the stag0 names.
 
 ## Deploy
@@ -125,6 +126,6 @@ The E2E scripts work unchanged against it: `BLOCKTANK_URL=$H ./scripts/fund-addr
 ## Operate
 
 - Blocks: the faucet mines only on request. The nightly `regtest-mine.yml` in bitkit-e2e-tests keeps the chain moving once it points here.
-- Faucet funds: regtest block rewards halve every 150 blocks. If `GET /health` shows a low balance, mine a batch of blocks.
+- Faucet funds: regtest block rewards halve every 150 blocks and reach zero near height 4950. Below that, mine a batch when `GET /health` shows a low balance. Above it, the faucet lives on what it holds.
 - Upgrades: images are pinned in `staging/compose.yml`. Bump one, then `docker compose up -d --build`.
 - Logs: `docker compose logs -f <service>`.
