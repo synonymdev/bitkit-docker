@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# Runs and drives the `spark` profile, a local Spark regtest network on bitkit-docker's chain (docs/spark-regtest.md).
+
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+CLI_NAME="$(basename "$0")"
+COMPOSE=(docker compose --profile spark)
+CONFIG=spark-regtest/data/spark-config.json
+API=http://127.0.0.1:23090/api
+SPARK_BTC=(exec -T spark-bitcoind bitcoin-cli -regtest -rpcport=18443 -rpcuser=rpcuser -rpcpassword=rpcpassword)
+ALICE=(exec -T spark-ldk-alice ldk-server-cli --config /local/ldk-alice.toml --base-url localhost:3536)
+
+show_help() {
+  cat <<EOF
+Runs the local Spark regtest network (compose profile \`spark\`).
+Usage: ${CLI_NAME} <command> [options]
+Stack:
+    up                       Build and start bitkit-docker with the spark profile, then wait until a wallet can connect
+    down                     Stop the Spark services (bitkit-docker keeps running)
+    reset                    Stop the Spark services and delete their state
+    status                   Show the Spark services
+    logs [service]           Follow the Spark services' logs
+    config [--base64]        Print the Spark config a wallet connects with
+Chain:
+    mine [count]             Mine blocks on spark-bitcoind (default: 1)
+    mine-to <height>         Mine up to a height
+    mature [blocks]          Mine past every Spark timelock (default: 2000 blocks, in steps of 100)
+    send <address> <sats> [-m N]
+                             Pay an on-chain address (a Spark deposit, a Savings or exit funding address) and mine N
+                             blocks (default: 1)
+    tx <txid>                A transaction's status and the spends of its outputs
+    address <address>        An address's balance, UTXOs and transactions
+    mempool                  The transactions waiting in spark-bitcoind's mempool
+    cli <args...>            bitcoin-cli on spark-bitcoind
+Lightning (Alice, who holds a channel with the SSP's node):
+    invoice <sats>           A BOLT11 invoice of Alice's, for a wallet to pay out of Spark
+    pay <invoice> [sats]     Pay a wallet's invoice from Alice, to fund it over Lightning (sats for an amountless one)
+Operators:
+    operators stop|start [0|1|2]
+                             Stop or start the operators (all three by default), for uncooperative-operator exits
+EOF
+}
+
+spark_services() {
+  "${COMPOSE[@]}" config --services | grep '^spark-'
+}
+
+mine() {
+  "${COMPOSE[@]}" exec -T spark-miner /scripts/mine.sh "$1"
+}
+
+height() {
+  "${COMPOSE[@]}" "${SPARK_BTC[@]}" getblockcount | tr -d '\r'
+}
+
+api() {
+  curl -sf "$API$1" || { echo "the chain API ($API$1) did not answer" >&2; return 1; }
+}
+
+command="${1:-}"
+[[ $# -gt 0 ]] && shift
+
+case "$command" in
+up)
+  "${COMPOSE[@]}" up -d --build
+  echo "Waiting for the Spark stack. The first start builds the images and generates the operators' keys, which takes a while."
+  "${COMPOSE[@]}" logs -f --no-log-prefix spark-ready &
+  logs_pid=$!
+  status=$(docker wait "$("${COMPOSE[@]}" ps -aq spark-ready)")
+  sleep 1
+  kill "$logs_pid" 2>/dev/null || true
+  wait "$logs_pid" 2>/dev/null || true
+  exit "$status"
+  ;;
+down)
+  # shellcheck disable=SC2046
+  "${COMPOSE[@]}" stop $(spark_services)
+  ;;
+reset)
+  # shellcheck disable=SC2046
+  "${COMPOSE[@]}" rm -sf $(spark_services)
+  project=$("${COMPOSE[@]}" config --format json | jq -r .name)
+  for volume in local data_sync ldk_data ldk_alice_data bitcoind postgres electrs; do
+    docker volume rm -f "${project}_spark_${volume}" >/dev/null
+  done
+  rm -rf spark-regtest/data
+  echo "Spark state deleted."
+  ;;
+status)
+  # shellcheck disable=SC2046
+  "${COMPOSE[@]}" ps -a $(spark_services)
+  ;;
+logs)
+  if [[ $# -gt 0 ]]; then
+    "${COMPOSE[@]}" logs -f "$@"
+  else
+    # shellcheck disable=SC2046
+    "${COMPOSE[@]}" logs -f $(spark_services)
+  fi
+  ;;
+config)
+  [[ -f $CONFIG ]] || { echo "$CONFIG is missing: run ./spark up first" >&2; exit 1; }
+  if [[ "${1:-}" == "--base64" ]]; then
+    base64 <"$CONFIG" | tr -d '\n'
+    echo
+  else
+    cat "$CONFIG"
+  fi
+  ;;
+mine)
+  mine "${1:-1}"
+  ;;
+mine-to)
+  target="${1:?usage: $CLI_NAME mine-to <height>}"
+  current=$(height)
+  if ((target > current)); then
+    mine $((target - current))
+  else
+    echo "already at height $current"
+  fi
+  ;;
+mature)
+  # A Spark leaf's refund timelock starts at 2000 blocks and drops by 100 with each transfer, so 2000 blocks matures
+  # any refund. Steps of 100 let the wallets and the operators' watchtower follow the chain.
+  remaining="${1:-2000}"
+  while ((remaining > 0)); do
+    step=$((remaining < 100 ? remaining : 100))
+    mine "$step"
+    remaining=$((remaining - step))
+    sleep 1
+  done
+  ;;
+send)
+  usage="usage: $CLI_NAME send <address> <sats> [-m N]"
+  address="${1:?$usage}"
+  sats="${2:?$usage}"
+  shift 2
+  blocks=1
+  if [[ "${1:-}" == "-m" ]]; then
+    blocks="${2:?-m needs a block count}"
+  fi
+  "${COMPOSE[@]}" exec -T spark-miner /scripts/fund.sh "$address" "$sats"
+  if ((blocks > 0)); then
+    mine "$blocks"
+  fi
+  ;;
+tx)
+  txid="${1:?usage: $CLI_NAME tx <txid>}"
+  tip=$(api /blocks/tip/height)
+  api "/tx/$txid" | jq --argjson tip "$tip" '{
+    txid, version, fee, vsize: (.weight / 4 | ceil),
+    status: (if .status.confirmed then "confirmed at \(.status.block_height), \($tip - .status.block_height + 1) confirmations" else "in the mempool" end),
+    inputs: [.vin[] | {txid, vout, sequence}],
+    outputs: [.vout[] | {value, address: (.scriptpubkey_address // .scriptpubkey_type)}]
+  }'
+  api "/tx/$txid/outspends" | jq -c 'to_entries[] | {vout: .key, spent: .value.spent, by: .value.txid}'
+  ;;
+address)
+  address="${1:?usage: $CLI_NAME address <address>}"
+  api "/address/$address" | jq '{address,
+    confirmed_sats: (.chain_stats.funded_txo_sum - .chain_stats.spent_txo_sum),
+    unconfirmed_sats: (.mempool_stats.funded_txo_sum - .mempool_stats.spent_txo_sum)}'
+  api "/address/$address/utxo" | jq -c '.[] | {txid, vout, value, confirmed: .status.confirmed}'
+  api "/address/$address/txs" | jq -r '.[] | "\(.txid) \(if .status.confirmed then "confirmed at \(.status.block_height)" else "unconfirmed" end)"'
+  ;;
+mempool)
+  api /mempool/txids | jq -r '.[]'
+  ;;
+cli)
+  "${COMPOSE[@]}" "${SPARK_BTC[@]}" "$@"
+  ;;
+invoice)
+  sats="${1:?usage: $CLI_NAME invoice <sats>}"
+  "${COMPOSE[@]}" "${ALICE[@]}" bolt11-receive "${sats}sat"
+  ;;
+pay)
+  invoice="${1:?usage: $CLI_NAME pay <invoice> [sats]}"
+  if [[ $# -gt 1 ]]; then
+    "${COMPOSE[@]}" "${ALICE[@]}" bolt11-send "$invoice" "${2}sat"
+  else
+    "${COMPOSE[@]}" "${ALICE[@]}" bolt11-send "$invoice"
+  fi
+  ;;
+operators)
+  action="${1:-}"
+  [[ "$action" == "stop" || "$action" == "start" ]] || { echo "usage: $CLI_NAME operators stop|start [0|1|2]" >&2; exit 1; }
+  shift
+  if [[ $# -gt 0 ]]; then
+    services=("spark-so-$1")
+  else
+    services=(spark-so-0 spark-so-1 spark-so-2)
+  fi
+  "${COMPOSE[@]}" "$action" "${services[@]}"
+  ;;
+"" | -h | --help)
+  show_help
+  ;;
+*)
+  echo "Unknown command: $command" >&2
+  show_help
+  exit 1
+  ;;
+esac
