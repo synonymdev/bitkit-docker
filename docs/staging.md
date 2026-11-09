@@ -85,15 +85,17 @@ The new staging is a fresh build: nothing comes from stag0, neither images, conf
 Needs Docker with Compose, ports 80, 443 and 9999 open, and DNS records for the three hosts.
 
 ```bash
-git clone --recurse-submodules https://github.com/synonymdev/bitkit-docker.git
-git clone https://github.com/synonymdev/lnurl-auth-server.git   # private, read access needed
-cd bitkit-docker/staging
+git clone https://github.com/synonymdev/bitkit-docker.git
+git clone https://github.com/synonymdev/lnurl-auth-server.git   # private; staging builds it from this sibling checkout
+cd bitkit-docker
+git submodule update --init vss-server
+cd staging
 ./init.sh                 # .env with fresh passwords and keys, JWT key pair in secrets/
 $EDITOR .env              # STAGING_HOST, MEMPOOL_HOST, ELECTRUM_HOST, ACME_EMAIL
 docker compose up -d --build
 ```
 
-- `--recurse-submodules` fetches `homegate` over SSH too. Without access to it, run `git submodule update --init vss-server` instead.
+- Staging needs only the `vss-server` submodule. `LNURL_AUTH_SERVER_SRC` in `.env` points at another lnurl-auth-server checkout if it doesn't sit beside bitkit-docker.
 - `init.sh` never overwrites a value or key, so it is safe to rerun. Keep `.env` and `secrets/` out of the repository and back them up with the volumes.
 - Only Caddy publishes ports. With an ingress of your own, drop `caddy` and route the paths in `staging/Caddyfile` to the same services. Electrum is plain TCP on `electrs:60001`, so it needs a TLS stream in front.
 - Data lives in the named volumes `bitcoin`, `electrs`, `mempool-db`, `vss-db`, `lnurl-auth`, `ldk-backup` and `caddy-data`. Back up `vss-db` and `ldk-backup`. The chain can be rebuilt, and electrs and mempool reindex.
