@@ -64,10 +64,18 @@ command="${1:-}"
 
 case "$command" in
 up)
-  "${COMPOSE[@]}" up -d --build
-  echo "Waiting for the Spark stack. The first start builds the images and generates the operators' keys, which takes a while."
+  echo "Building the images. The first start builds them from source, which takes a while."
+  "${COMPOSE[@]}" build
+  # spark-ready reports the setup's progress, so its log is followed before the rest starts: `up` waits for the
+  # operators to generate their keys, which is most of the setup.
+  "${COMPOSE[@]}" up -d spark-ready
+  echo "Waiting for the Spark stack. The operators generate their keys first, which takes several minutes."
   "${COMPOSE[@]}" logs -f --no-log-prefix spark-ready &
   logs_pid=$!
+  if ! "${COMPOSE[@]}" --progress quiet up -d; then
+    kill "$logs_pid" 2>/dev/null || true
+    exit 1
+  fi
   status=$(docker wait "$("${COMPOSE[@]}" ps -aq spark-ready)")
   sleep 1
   kill "$logs_pid" 2>/dev/null || true

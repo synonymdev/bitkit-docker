@@ -48,9 +48,12 @@ mine to timelock maturity. Shared CI and staging stay on Lightspark's hosted reg
   prints the progress and ends with where every service is.
 - **Mining.** While the stack sets up, `spark-miner` mines a block every 5 s. After that it mines only on request.
   `SPARK_BLOCK_INTERVAL_SECONDS=10 ./spark up` keeps a block every 10 s instead.
-- **Funds.** On a chain under 200 blocks, the miner mines to 200 into its own wallet. On a longer chain, it takes 20 BTC
-  from `bitcoind`'s wallet. If that wallet holds less, run `./bitcoin-cli fund`, then
-  `docker compose restart spark-miner`.
+- **Funds.** `spark-bitcoind`'s wallet pays for the SSP's pool, Alice's channel and `./spark send`. On a chain under 200
+  blocks, the miner mines to 200 into it. When it holds under 10 BTC, the miner takes 20 BTC from `bitcoind`'s wallet.
+  Its keys are fixed, so it keeps its coins across `./spark reset`.
+- **A long chain.** Regtest halves the block reward every 150 blocks, so past a few thousand blocks mining adds no coins.
+  If neither wallet can pay, `./spark up` stops at the SSP's pool and `spark-miner`'s log says so. Send coins to the
+  address it names from another wallet on this chain, or start a new chain with `docker compose --profile spark down -v`.
 
 | Setting | Default | What it sets |
 | --- | --- | --- |
@@ -62,7 +65,11 @@ mine to timelock maturity. Shared CI and staging stay on Lightspark's hosted reg
 ## Point a Bitkit dev build at it
 
 Bitkit's regtest builds connect to Lightspark's hosted regtest by default. A dev build connects to this stack when it
-gets two settings, read like `ESPLORA_URL`:
+gets two settings, read like `ESPLORA_URL`. The apps read them once their local Spark setting changes land on the Spark
+branches ([synonymdev/bitkit-android#1697](https://github.com/synonymdev/bitkit-android/pull/1697),
+[synonymdev/bitkit-ios#1128](https://github.com/synonymdev/bitkit-ios/pull/1128)). Until then a dev build needs the
+same patched in: pass the config to `parse_spark_config` for the SDK's `spark_config`, set the chain service to
+`MempoolSpace` at the chain URL, and turn the fee ladders off.
 
 | Setting | Value | What the app does with it |
 | --- | --- | --- |
@@ -72,7 +79,8 @@ gets two settings, read like `ESPLORA_URL`:
 - **Builds only.** Both settings apply to dev and regtest builds only. Left unset, the build stays on the hosted
   regtest.
 - **Savings.** ldk-node stays on bitkit-docker's Electrum (`tcp://127.0.0.1:60001`), which is the same chain.
-- **Reset.** `./spark reset` issues a new config, so build again or pass the new one at launch.
+- **Reset.** The config is built from fixed keys, so it stays the same across `./spark reset` unless
+  `SPARK_PUBLIC_HOST` changes.
 
 ### Android emulator
 

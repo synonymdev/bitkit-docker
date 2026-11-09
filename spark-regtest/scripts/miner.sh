@@ -53,7 +53,9 @@ if [ "$(rpc getbalance | jq -r 'floor')" -lt "$WALLET_MIN_BTC" ]; then
     main_rpc generatetoaddress "[1, \"$UNOWNED_ADDRESS\"]" >/dev/null
     wait_for_chain_sync
   else
-    log "bitkit-docker's bitcoind wallet could not send $((WALLET_MIN_BTC * 2)) BTC; fund it (./bitcoin-cli fund) and restart spark-miner"
+    # A block pays nothing past height 5,000 and little past 1,000 (regtest halves every 150 blocks), so mining more
+    # does not help a long chain.
+    log "bitkit-docker's bitcoind wallet could not send $((WALLET_MIN_BTC * 2)) BTC. Send $WALLET_MIN_BTC BTC or more to $wallet_address from a wallet on this chain and restart spark-miner, or start a new chain (docker compose --profile spark down -v)"
   fi
 fi
 

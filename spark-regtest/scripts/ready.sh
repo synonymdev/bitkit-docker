@@ -45,6 +45,11 @@ progress() {
     # that as a return to the first phase would read as progress lost.
     keys_ready=1
   fi
+  # bitkit-docker: the funder waits for 1 BTC, which a long shared chain no longer mines (spark-miner's log says why).
+  if balance=$(rpc getbalance 2>/dev/null | jq -r floor) && [ -n "$balance" ] && [ "$balance" -lt 1 ]; then
+    message="spark-bitcoind's wallet holds under 1 BTC, so the SSP cannot stock its pool: see 'docker compose logs spark-miner'"
+    return
+  fi
   if ! stocked=$(pool_stocked 2>/dev/null); then
     message="the SSP is starting"
     return
@@ -89,6 +94,12 @@ while [ ! -f "$LOCAL_DIR/ready" ] || [ ! -f "$LOCAL_DIR/lightning-ready" ] ||
 done
 
 # The chain API the SDK reads still lags the chain by a block or two here.
-wait_for_chain_api
+until chain_api_current; do
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    log "still not ready after $((READY_TIMEOUT_SECONDS / 60)) minutes: the chain API ($CHAIN_API_URL) is behind the chain"
+    exit 1
+  fi
+  sleep 1
+done
 
 exec "$(dirname "$0")/summary.sh"

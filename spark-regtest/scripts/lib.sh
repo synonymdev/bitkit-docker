@@ -53,10 +53,23 @@ wait_for_chain_sync() {
 }
 
 # The wallet funds the SSP and the faucet. It is loaded on startup once created.
+# bitkit-docker: its keys are fixed (SPARK_WALLET_TPRV) and imported from the chain's start, so after ./spark reset the
+# new wallet holds what the last one held, and the shared chain's coins are not spent one reset at a time.
 ensure_wallet() {
+  : "${SPARK_WALLET_TPRV:?}"
   rpc listwallets | jq -e 'index("default")' >/dev/null && return 0
   rpc loadwallet '["default"]' >/dev/null 2>&1 && return 0
-  rpc createwallet '["default", false, false, "", false, true, true]' >/dev/null
+  rpc createwallet '["default", false, true, "", false, true, true]' >/dev/null
+  _requests=""
+  for _branch in 0 1; do
+    _descriptor="wpkh($SPARK_WALLET_TPRV/84h/1h/0h/$_branch/*)"
+    _checksum=$(rpc getdescriptorinfo "[\"$_descriptor\"]" | jq -r .checksum)
+    _internal=false
+    [ "$_branch" = 1 ] && _internal=true
+    _requests="$_requests{\"desc\":\"$_descriptor#$_checksum\",\"timestamp\":0,\"active\":true,\"internal\":$_internal,\"range\":[0,4999]},"
+  done
+  log "importing the wallet's keys and scanning the chain for its coins"
+  rpc importdescriptors "[[${_requests%,}]]" default | jq -e 'all(.success)' >/dev/null
 }
 
 ssp_cli() {
@@ -81,11 +94,9 @@ pool_denominations() {
 
 # The chain API answers from the block the SDK's wallets are about to read, not
 # from a block electrs has yet to index.
-wait_for_chain_api() {
+chain_api_current() {
   : "${CHAIN_API_URL:?}"
-  until [ "$(curl -sf "$CHAIN_API_URL/blocks/tip/height" || echo -1)" -ge "$(rpc getblockcount)" ]; do
-    sleep 1
-  done
+  [ "$(curl -sf "$CHAIN_API_URL/blocks/tip/height" || echo -1)" -ge "$(rpc getblockcount)" ]
 }
 
 # Answers once the lnurl server serves the addresses wallets register with it.

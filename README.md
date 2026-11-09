@@ -689,7 +689,7 @@ The `spark` profile runs a Spark network of your own on this chain: three Spark 
 ```
 
 - **Mine with `./spark`.** Spark's transactions relay only through `spark-bitcoind` (Bitcoin Core 31), which follows `bitcoind` over P2P. A block from `./bitcoin-cli mine` leaves them unconfirmed.
-- **Dev build.** Build with `SPARK_LOCAL_CONFIG_B64="$(./spark config --base64)"` and `SPARK_LOCAL_CHAIN_URL=http://127.0.0.1:23090/api`. On iOS, they can also go to a simulator launch as `SIMCTL_CHILD_` variables. The app's ldk-node stays on Electrum `tcp://127.0.0.1:60001`.
+- **Dev build.** Build with `SPARK_LOCAL_CONFIG_B64="$(./spark config --base64)"` and `SPARK_LOCAL_CHAIN_URL=http://127.0.0.1:23090/api`. The apps read these settings only once their local Spark setting changes land; until then a build needs them patched in ([docs/spark-regtest.md](docs/spark-regtest.md#point-a-bitkit-dev-build-at-it)). On iOS, they can also go to a simulator launch as `SIMCTL_CHILD_` variables. The app's ldk-node stays on Electrum `tcp://127.0.0.1:60001`.
 - **Android emulator.** Run `adb reverse tcp:<port> tcp:<port>` for 23535, 23536, 23537, 23049, 23090 and 60001.
 - **iOS simulator.** The `127.0.0.1` URLs work as they are.
 - **Exit test.**

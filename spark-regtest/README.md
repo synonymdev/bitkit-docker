@@ -27,6 +27,8 @@ What differs:
   its own. Before it mines, `miner.sh` waits until it holds that chain (`wait_for_chain_sync` in `lib.sh`).
 - Its wallet is topped up from `bitcoind`'s wallet, since a long shared chain pays little per coinbase. `funder.sh`
   waits for 1 BTC instead of 1,000.
+- Its wallet's keys are fixed (`SPARK_WALLET_TPRV` in `spark.env`), so it keeps its coins across `./spark reset`.
+- `ready.sh` says when that wallet cannot fund the SSP, and its wait for the chain API keeps the startup deadline.
 - Mining defaults to on request once the stack is ready.
 - The SSP carries upstream's `ce29ca045` (the `silent_payment_proof` field, always null), which Spark SDK 0.28 asks for.
   Newer SSPs cannot talk to the public operator, so the SSP, ldk-server and LNURL server stay on `7b6124227`.
