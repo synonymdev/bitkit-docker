@@ -1089,6 +1089,32 @@ and its existing Maven authentication. No local-AAR substitute is needed.
 The test run owns app installation, MAX review and deadline-expiry proof on its
 lane's devices. No device is launched on the coordinator.
 
+## Public staging
+
+`staging/` deploys Bitkit's public regtest staging without Blocktank: VSS, LNURL-auth, a regtest bitcoind, mempool and its electrs (explorer, Esplora REST and Electrum over TLS), a faucet and miner at Blocktank's `/regtest/chain/deposit` and `mine` paths, the fx-rates relay and the RN backup server, behind one Caddy. It keeps `*.stag0.blocktank.to`'s paths, so apps and tests switch by host.
+
+Needs Docker with Compose, ports 80, 443 and 9999 open, and DNS records for the three hostnames.
+
+```bash
+git clone https://github.com/synonymdev/bitkit-docker.git
+git clone https://github.com/synonymdev/lnurl-auth-server.git   # private; staging builds it from this sibling checkout
+cd bitkit-docker
+git submodule update --init vss-server
+cd staging
+./init.sh                 # .env with fresh passwords and keys, JWT key pair in secrets/
+$EDITOR .env              # STAGING_HOST, MEMPOOL_HOST, ELECTRUM_HOST, ACME_EMAIL
+docker compose up -d --build
+```
+
+Check it is up (the faucet reports its height and balance once it funded itself):
+
+```bash
+docker compose ps
+curl -s https://<staging-host>/health   # {"height":…,"balanceSat":…}
+```
+
+[docs/staging.md](docs/staging.md) has the endpoints, what Bitkit still calls on stag0, the settings to change, the migration checklist and smoke checks.
+
 ## Production Considerations
 
 Do not use for production. Bitkit Dev server is vibe-coded and not optimised.

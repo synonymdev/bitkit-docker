@@ -1,0 +1,71 @@
+# Public face of the staging: stag0's paths on STAGING_HOST, so moving an app or test is a host swap.
+{
+	email {$ACME_EMAIL}
+	{$CADDY_GLOBAL_OPTIONS}
+	layer4 {
+		:9999 {
+			route {
+				tls
+				proxy electrs:60001
+			}
+		}
+	}
+}
+
+{$STAGING_HOST} {
+	# VSS backups (ldk-node appends /getObject, /putObjects, ...); the server serves /vss/*
+	handle_path /vss_rs_auth/* {
+		rewrite * /vss{path}
+		reverse_proxy vss:5050
+	}
+	# LNURL-auth that issues VSS's JWTs; SERVER_DOMAIN carries the /lnurl_auth prefix
+	handle_path /lnurl_auth/* {
+		reverse_proxy lnurl-auth:5005
+	}
+	# BTC fiat rates, relayed from the production feed
+	handle /fx/rates/btc {
+		rewrite * {$FX_UPSTREAM_PATH}
+		reverse_proxy {$FX_UPSTREAM_ORIGIN} {
+			header_up Host {upstream_hostport}
+		}
+	}
+	# RN app backups, read by the RN-to-native migration
+	handle_path /backups-ldk/* {
+		reverse_proxy ldk-backup:3003
+	}
+	# Esplora REST of the chain
+	handle_path /electrs/* {
+		reverse_proxy electrs:3000
+	}
+	# Faucet and miner, at Blocktank's regtest paths with or without its API prefix
+	handle /regtest/chain/* {
+		reverse_proxy faucet:3000
+	}
+	handle /blocktank/api/v2/regtest/chain/* {
+		reverse_proxy faucet:3000
+	}
+	handle /health {
+		reverse_proxy faucet:3000
+	}
+	respond 404
+}
+
+# Explorer, laid out as mempool.space: /api/v1/* is mempool's backend, the rest of /api/* is electrs' Esplora REST
+{$MEMPOOL_HOST} {
+	@esplora {
+		path /api/*
+		not path /api/v1/*
+	}
+	handle @esplora {
+		uri strip_prefix /api
+		reverse_proxy electrs:3000
+	}
+	handle {
+		reverse_proxy mempool-web:8080
+	}
+}
+
+# Electrum is ssl://ELECTRUM_HOST:9999; this site block only makes Caddy manage the host's certificate
+{$ELECTRUM_HOST} {
+	respond "Electrum: ssl://{$ELECTRUM_HOST}:9999"
+}

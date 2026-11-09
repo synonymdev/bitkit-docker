@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Run a local Spark regtest network on this chain (`spark` profile, `./spark`): the last public Spark operators and the Spark service provider that matches them, patched for Spark SDK 0.28 wallets, mempool.space, and commands to stop operators, mine to timelock maturity, fund addresses and read an exit's on-chain state
+- Deploy Bitkit's public regtest staging without Blocktank from `staging/`, replacing `*.stag0.blocktank.to`
 - Add local Orchestra and LayerZero providers with bridge lifecycle controls, real Arbitrum credits/refunds and a Core bridge smoke suite
 - Add an isolated `usdt` Compose profile with pinned Anvil/Alto/gateway images, a containerized Core wallet, real payment/proof smoke checks, controlled paymaster failures and private-network Shop verification
 - Run the Shop's marketplace on Synonym's staging with our own Paykit Server v0.1.0-rc11 behind a Cloudflare quick tunnel (`./shop-mixed`, profile `shop-mixed`)
