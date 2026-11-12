@@ -153,8 +153,9 @@ its creators, so for a Bitkit seller the fixture cannot derive the expected addr
 
 - verified by the fixture: the Payment Request address a headless buyer receives (`receive`) is a regtest
   native SegWit address; the mempool holds a transaction paying exactly that address and the purchase amount
-  (`pay`, `mine --bundle`; for an app buyer the address comes from `mine --address` or from the one p2wpkh
-  output of exactly the amount, both exercised with an app buyer on Android and iOS); Paykit Server's signed status goes `detected` and then `confirmed` with a
+  (`pay`, `mine --bundle`; for a native buyer/seller use the known payout `--address` or
+  `--txid` read from native transaction details, which must identify exactly one matching output);
+  Paykit Server's signed status goes `detected` and then `confirmed` with a
   matching amount and one confirmation, which means its own derived address for the invoice received the
   payment; the purchase reaches `completed`.
 - verified only in the seller app: that the address is derived from the wallet's own xpub. The seller wallet
@@ -196,10 +197,13 @@ more confirmations, the gate Locks applies with `minimum_confirmations = 1`.
 The derived address is the seller xpub's external child `0/<n>`, where `n` is the number of earlier
 purchases for that seller, checked through `bitcoind deriveaddresses`. A headless `receive` compares it
 with the address in the delivered Payment Request. A Bitkit seller's xpub is not in the fixture, so its
-purchases have `derived_address` null and a `payout_address` learned from the Payment Request, `mine --address`
-or the transaction that pays the exact amount (`payout_address_source` says which: `payment_request`, `operator`
-or `amount_match`). With an app buyer both `amount_match` and `mine --bundle` without `--address` have been
-exercised, on Android and on iOS.
+purchases have `derived_address` null and a `payout_address` learned from the Payment Request,
+`mine --address` or an explicit `mine --txid` observed in native transaction details
+(`payout_address_source`: `payment_request`, `operator` or `observed_txid`). Amount-only
+inference is refused: it previously attributed an older equal-amount baseline to an unpaid purchase.
+Unknown native addresses/transaction ids stay null until explicitly bound. A native txid must be
+in the mempool and have exactly one matching native SegWit output; supply the known address to
+disambiguate equal outputs. Conflicts with existing purchase bindings are errors.
 
 `mine --bundle` mines one block only after it finds the purchase transaction in the mempool. The headless buyer's
 `pay` records its txid; for a buyer that pays from an app, `mine --bundle` looks for the transaction that pays

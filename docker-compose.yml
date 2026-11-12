@@ -579,12 +579,14 @@ services:
         # the fixture on the server's paykit-rs (`./pubky-marketplace` sets the tag from PAYKIT_RS_TAG)
         fixture: docker-image://bitkit-docker/payment-request-fixture:${PAYKIT_FIXTURE_TAG:-rc65-shared}
       labels:
+        tech.masivo.marketplace-driver-source: ${MARKETPLACE_DRIVER_SOURCE:-unrecorded}
         tech.masivo.paykit-server: ${PAYKIT_SERVER_REV:-0ffd4da2adaab048939e0ea18ff916a27a7cfb0e}
         tech.masivo.paykit-rs: ${PAYKIT_RS_REV:-7185ae7da9315028e5331442d71d739c27f1442c}
     network_mode: service:pubky-testnet
     depends_on:
       - pubky-testnet
     environment:
+      MARKETPLACE_LOCK_POLICY: ${MARKETPLACE_LOCK_POLICY:-legacy}
       BITCOIN_RPC_URL: http://bitcoind:43782
       BITCOIN_RPC_USER: polaruser
       BITCOIN_RPC_PASS: polarpass
@@ -599,8 +601,11 @@ services:
   # (6298) delays or fails the requests of one identity and path (README, Homeserver proxy). Without rules it only forwards.
   homeserver-proxy:
     profiles: [marketplace]
-    image: bitkit-docker/payment-request-fixture:rc65-shared
-    build: ./payment-requests
+    image: bitkit-docker/payment-request-fixture:${PAYKIT_FIXTURE_TAG:-rc65-shared}
+    build:
+      context: ./payment-requests
+      args:
+        PAYKIT_RS_REV: ${PAYKIT_RS_REV:-7185ae7da9315028e5331442d71d739c27f1442c}
     restart: on-failure
     network_mode: service:pubky-testnet
     depends_on:
@@ -610,8 +615,11 @@ services:
   # The rc65 SDK peers (paykit-rs 7185ae7, the version both apps pin) share the marketplace testnet namespace and regtest chain. The service name `rc56-peer` stays: lanes and journeys address the peer by it.
   fixture-issuer:
     profiles: [payment-requests]
-    image: bitkit-docker/payment-request-fixture:rc65-shared
-    build: ./payment-requests
+    image: bitkit-docker/payment-request-fixture:${PAYKIT_FIXTURE_TAG:-rc65-shared}
+    build:
+      context: ./payment-requests
+      args:
+        PAYKIT_RS_REV: ${PAYKIT_RS_REV:-7185ae7da9315028e5331442d71d739c27f1442c}
     restart: "no"
     network_mode: service:pubky-testnet
     depends_on:
@@ -624,8 +632,11 @@ services:
 
   rc56-peer:
     profiles: [payment-requests]
-    image: bitkit-docker/payment-request-fixture:rc65-shared
-    build: ./payment-requests
+    image: bitkit-docker/payment-request-fixture:${PAYKIT_FIXTURE_TAG:-rc65-shared}
+    build:
+      context: ./payment-requests
+      args:
+        PAYKIT_RS_REV: ${PAYKIT_RS_REV:-7185ae7da9315028e5331442d71d739c27f1442c}
     restart: "no"
     network_mode: service:pubky-testnet
     depends_on:

@@ -23,6 +23,10 @@ import { blake3 } from '@noble/hashes/blake3';
 import { HDKey } from '@scure/bip32';
 import { AuthFlowKind, Keypair, Pubky, PublicKey } from '@synonymdev/pubky';
 import { mergeTrust, missingTrust, requiredKeys, trustedKeys, withTrust } from './trust.mjs';
+import { paymentParams, invoiceBody } from './payment-policy.mjs';
+import { requireFixture, selectSeller, rememberBitkitSeller } from './seller-state.mjs';
+
+const LOCK_POLICY = process.env.MARKETPLACE_LOCK_POLICY ?? 'legacy';
 
 const STATE = '/state';
 const SECRETS = `${STATE}/secrets`;
@@ -122,9 +126,7 @@ async function readSecret(name) {
 
 async function readFixture() {
   const fixture = await readJson(FIXTURE_FILE, null);
-  if (STAGING && !fixture?.bitkit_seller) fail('no Bitkit seller yet; run: ./shop-mixed seller-auth');
-  if (!STAGING && !fixture?.seller) fail('fixture is not seeded; run: ./pubky-marketplace seed');
-  return fixture;
+  return requireFixture(fixture, STAGING);
 }
 
 // ------------------------------------------------------------------- bitcoind
@@ -274,11 +276,7 @@ async function sellerSession(seller) {
 
 // The seller record for `--seller`: the headless seller (default), the Bitkit seller, or its approved pubky.
 function pickSeller(fixture, which = STAGING ? 'bitkit' : 'headless') {
-  if (which === 'headless') return fixture.seller;
-  const bitkit = fixture.bitkit_seller;
-  if (!bitkit) fail('no Bitkit seller; run: ./pubky-marketplace seller-auth');
-  if (which === 'bitkit' || which === bitkit.pubky) return bitkit;
-  fail(`--seller must be headless, bitkit or ${bitkit.pubky}`);
+  return selectSeller(fixture, which);
 }
 
 const sellerOf = (fixture, pubky) => [fixture.seller, fixture.bitkit_seller].find((entry) => entry?.pubky === pubky) ?? fixture.seller;
@@ -558,7 +556,7 @@ async function createBuyer(sellerPubky) {
   const prepared = await runHelper(
     'paykit-reader-demo',
     { version: 1, operation: 'prepare', reader_secret: b64url(seed) },
-    readerEnv(sellerPubky ?? fixture.seller.pubky),
+    readerEnv(sellerPubky ?? fixture.seller?.pubky ?? fixture.bitkit_seller.pubky),
   );
   if (prepared.code !== 0) fail(`buyer receiver marker failed: ${[prepared.stdout, prepared.stderr].filter(Boolean).join(' ')}`);
   fixture.buyer = { pubky: buyer, receiver_path: BUYER_PATH, kind: 'headless' };
@@ -591,6 +589,7 @@ async function seed(args) {
     await approveSetupAs(authUrl, identitySeed, xpub, ACCOUNT_INDEX);
     await completeSetup(flowId);
     fixture = {
+      ...fixture,
       homeserver: HOMESERVER,
       seller: {
         pubky: sellerPubky,
@@ -697,7 +696,7 @@ function lockFor({ seller, sats, issuer }) {
       {
         criterion_id: 'criterion-1',
         verifier_type: 'paykit-payment',
-        params: { recipient_pubky: seller, amount: String(sats), asset: 'BTC' },
+        params: paymentParams(seller, sats, LOCK_POLICY),
       },
     ],
     lock_logic: { type: 'all', criteria: ['criterion-1'] },
@@ -721,7 +720,7 @@ async function expectedAddress(xpub, child) {
 // Where a purchase is paid. A headless seller's address is derived from its xpub before the purchase is
 // delivered. A Bitkit seller's xpub never leaves its wallet and Paykit Server exposes neither the xpub nor the
 // derived address, so the fixture learns the address from the delivered Payment Request (`receive`), from the
-// operator (`mine --address`) or from the transaction that pays the exact amount.
+// operator (`mine --address` or `mine --txid` using the native transaction details).
 const paymentAddress = (purchase) => purchase.derived_address ?? purchase.payout_address ?? null;
 
 async function validatePayoutAddress(address) {
@@ -747,16 +746,31 @@ async function setPayoutAddress(purchases, purchase, address, source) {
 // The transaction that pays a purchase, whoever paid it. The headless buyer's `pay` records its txid; a
 // Bitkit buyer pays from the app, so the ledger has none. Match on the purchase's address and amount
 // instead: in the mempool first, then in the latest blocks (a confirmed payment is no longer in the mempool).
-// Without a known address, match the one p2wpkh output of exactly the amount.
+// An amount alone cannot identify a native purchase: an earlier baseline or an
+// unrelated payment can have the same amount. Require its known payout address
+// or an explicit txid observed in the native transaction details.
 const RECENT_BLOCKS = 50;
 
-async function findPaymentTx(purchase, { mempoolOnly = false } = {}) {
+async function findPaymentTx(purchase, { mempoolOnly = false, txid = null } = {}) {
   const address = paymentAddress(purchase);
+  if (!address && !txid) return null;
+  if (txid) {
+    if (!/^[0-9a-f]{64}$/.test(txid)) fail('--txid must be the exact lowercase native transaction id');
+    if (purchase.txid && purchase.txid !== txid) fail('the purchase already has a different transaction id');
+    if (mempoolOnly && !(await rpc('getrawmempool')).includes(txid)) return null;
+    const tx = await rpc('getrawtransaction', [txid, true]);
+    if (tx.txid !== txid) fail('the node returned a different transaction id');
+    const outputs = tx.vout.filter((output) =>
+      Math.round(output.value * 1e8) === purchase.amount_sats &&
+      (address ? output.scriptPubKey?.address === address : output.scriptPubKey?.type === 'witness_v0_keyhash'));
+    if (outputs.length !== 1) fail('the native transaction must have exactly one matching payout output; pass --address to disambiguate');
+    return { txid, confirmed: (tx.confirmations ?? 0) > 0, address: outputs[0].scriptPubKey.address };
+  }
   const paid = (tx) =>
     tx.vout.find(
       (output) =>
         Math.round(output.value * 1e8) === purchase.amount_sats &&
-        (address ? output.scriptPubKey?.address === address : output.scriptPubKey?.type === 'witness_v0_keyhash'),
+        output.scriptPubKey?.address === address,
     );
   const found = [];
   for (const txid of await rpc('getrawmempool')) {
@@ -783,8 +797,10 @@ async function findPaymentTx(purchase, { mempoolOnly = false } = {}) {
 
 // Remember the payment transaction in the ledger. Returns it, or null when the payment is not on chain yet.
 async function recordPaymentTx(purchases, purchase, options) {
-  const tx = purchase.txid && !options?.mempoolOnly ? { txid: purchase.txid } : await findPaymentTx(purchase, options);
+  const tx = purchase.txid && !options?.mempoolOnly && !options?.txid
+    ? { txid: purchase.txid } : await findPaymentTx(purchase, options);
   if (!tx) return null;
+  if (tx.address && !paymentAddress(purchase)) await validatePayoutAddress(tx.address);
   let changed = false;
   if (purchase.txid !== tx.txid) {
     purchase.txid = tx.txid;
@@ -793,7 +809,7 @@ async function recordPaymentTx(purchases, purchase, options) {
   }
   if (tx.address && !paymentAddress(purchase)) {
     purchase.payout_address = tx.address;
-    purchase.payout_address_source = 'amount_match';
+    purchase.payout_address_source = 'observed_txid';
     changed = true;
   }
   if (changed) await writeJson(PURCHASES_FILE, purchases);
@@ -830,7 +846,7 @@ async function purchase(args) {
 
   const bundleId = newBundleId();
   const lockResource = `${seller.pubky}${lockPath}`;
-  const response = await signedPost('/invoices', { bundle_id: bundleId, lock_resource: lockResource, reader });
+  const response = await signedPost('/invoices', invoiceBody(bundleId, lockResource, reader, LOCK_POLICY));
   // Paykit Server answers 200 with invoice_created_at and payment_deadline (204 with no body before the Locks payment window)
   if (response.status !== 200 && response.status !== 204) {
     const code = response.json?.error?.code ? ` ${response.json.error.code}` : '';
@@ -960,6 +976,8 @@ async function statusCommand(args) {
     payout_address_source: purchase.derived_address ? 'seller_xpub' : (purchase.payout_address_source ?? null),
     amount_sats: purchase.amount_sats,
     txid: purchase.txid ?? null,
+    payment_binding_required: !paymentAddress(purchase) && !purchase.txid
+      ? 'Read the native TXID, then mine --bundle <id> --txid <native-txid>; or supply the known payout --address. Amount-only inference is refused.' : null,
     paykit_status: paykit,
     // Completed is the gate Locks applies with minimum_confirmations = 1.
     purchase_state: purchase.state,
@@ -990,10 +1008,11 @@ async function mine(args) {
     const { purchases, purchase } = await findPurchase(bundle);
     const address = flag(args, '--address');
     if (address) await setPayoutAddress(purchases, purchase, address, 'operator');
-    // The headless buyer's txid is in the ledger; for any other buyer find the payment by address and amount.
-    payment = purchase.txid && mempoolBefore.includes(purchase.txid)
-      ? { txid: purchase.txid }
-      : await recordPaymentTx(purchases, purchase, { mempoolOnly: true });
+    const txid = flag(args, '--txid') ?? purchase.txid ?? null;
+    if (!paymentAddress(purchase) && !txid) {
+      fail('the native payout is unknown; pass --txid <native TXID> or --address <known payout address>; amount-only inference is refused');
+    }
+    payment = await recordPaymentTx(purchases, purchase, { mempoolOnly: true, txid });
     if (!payment) fail('the purchase transaction is not in the mempool');
     payoutAddress = paymentAddress(purchase);
   }
@@ -1257,21 +1276,18 @@ async function adoptBitkitSeller(session, kind) {
   const restored = await pubkyClient().restoreSession(secret);
   if (restored.info.publicKey.toString() !== pubky) fail('the exported grant session restores to another identity');
   await writeSecret(`${SECRETS}/${BITKIT_SESSION_SECRET}`, secret);
-  // On staging the Bitkit seller is the first seller the fixture has.
-  const fixture = STAGING ? await readJson(FIXTURE_FILE, {}) : await readFixture();
-  const previous = fixture.bitkit_seller?.pubky === pubky ? fixture.bitkit_seller : {};
+  // A native seller can be the first seller on either backend. Its grant is
+  // already verified above; no headless identity/spending key is needed.
+  const fixture = await readJson(FIXTURE_FILE, {});
   const paykitSetup = await setupStatus(pubky);
-  fixture.bitkit_seller = {
-    ...previous,
+  const updated = rememberBitkitSeller(fixture, {
     pubky,
     kind,
     client_id: LOCKS_CLIENT_ID,
     capabilities: LOCKS_CAPS,
-    marketplace_grant_at: new Date().toISOString(),
-    ...(paykitSetup === 'ready' ? { setup_completed_at: previous.setup_completed_at ?? new Date().toISOString() } : {}),
-  };
-  await writeJson(FIXTURE_FILE, fixture);
-  return { seller: fixture.bitkit_seller, paykitSetup };
+  }, paykitSetup === 'ready', new Date().toISOString());
+  await writeJson(FIXTURE_FILE, updated);
+  return { seller: updated.bitkit_seller, paykitSetup };
 }
 
 // Print the marketplace grant request for the Bitkit seller wallet, wait for its approval and keep the grant
@@ -1280,7 +1296,6 @@ async function sellerAuth(args) {
   const relay = flag(args, '--relay') ?? LOCKS_RELAY;
   const seconds = Number(flag(args, '--timeout') ?? 300);
   if (!Number.isFinite(seconds) || seconds <= 0) fail('usage: seller-auth [--relay <url>] [--timeout <seconds>] [--serial <adb-serial>]');
-  if (!STAGING) await readFixture();
   const { flow, authUrl } = await startLocksGrant(relay);
   // One compact JSON object per line: the first line is the request, the last one the approval.
   outLine({

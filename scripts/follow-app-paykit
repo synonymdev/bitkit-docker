@@ -100,14 +100,24 @@ if [ "$server_rev" = "$rev" ] && [ "$built_patches" != "$patches" ]; then
   echo "paykit-server: $server_image carries patches '${built_patches}'; the fixture carries '${patches}'"
   server_rev="$rev (other patches)"
 fi
-if [ "$server_rev" = "$rev" ] && [ "$fixture_built" = 0 ]; then
+driver_source=$(python3 scripts/marketplace-driver-source.py marketplace/driver)
+driver_current=1
+for tag in $(compose_tags "$DRIVER"); do
+  built_source=$(docker image inspect --format '{{ index .Config.Labels "tech.masivo.marketplace-driver-source" }}' "$DRIVER:$tag" 2>/dev/null || true)
+  if [ "$built_source" != "$driver_source" ] || [ "$(built_rev "$DRIVER:$tag")" != "$rev" ]; then
+    driver_current=0
+    stale=1
+    echo "driver: $DRIVER:$tag needs source $driver_source and paykit-rs $rev"
+  fi
+done
+if [ "$server_rev" = "$rev" ] && [ "$fixture_built" = 0 ] && [ "$driver_current" = 1 ]; then
   echo "paykit-server: $server_image is built from $rev"
 else
   if [ "$server_rev" = "$rev" ]; then
     # the driver carries the fixture's `paykit-key-authorization`: rebuild it on the server revision already built
     server=$(docker image inspect --format '{{ index .Config.Labels "tech.masivo.paykit-server" }}' "$server_image")
     from="the revision $server_image was built from"
-    echo "driver: the fixture was rebuilt; rebuilding the driver on $from (${server:0:7})"
+    echo "driver: fixture or driver source changed; rebuilding on $from (${server:0:7})"
   else
     stale=1
     echo "paykit-server: $server_image is built from ${server_rev:-an unrecorded paykit-rs}; needs $rev"
@@ -123,11 +133,11 @@ else
     fi
   fi
   lock=$(curl -fsS "https://raw.githubusercontent.com/pubky/paykit-server/$server/Cargo.lock")
-  if ! grep -Fq -e "paykit-rs.git?tag=v$version#$rev" -e "paykit-rs.git?rev=$rev#$rev" <<<"$lock"; then # rc9 and later lock by rev
+  if ! alignment=$(printf '%s' "$lock" | python3 scripts/paykit-lock.py --lock - --paykit-rev "$rev" --cache .marketplace/provenance); then
     echo "paykit-server: $from (${server:0:7}) does not lock paykit-rs v$version; no Paykit Server revision to build" >&2
     exit 4
   fi
-  locks=$(sed -n 's|^source = "git+https://github.com/pubky/locks.git?tag=\([^#]*\)#\([0-9a-f]*\)"|\1 \2|p' <<<"$lock" | head -1)
+  locks=$(jq -r '.locks | .tag + " " + .revision' <<<"$alignment")
   echo "paykit-server: $from at ${server:0:7} locks paykit-rs v$version and locks ${locks%% *}"
   if [ "$check" != --check ]; then
     start=$SECONDS
@@ -143,4 +153,15 @@ else
 fi
 
 [ "$check" = --check ] && [ "$stale" = 1 ] && exit 3
+# Later commands retain only the verified public pins, never an auth token.
+if [ "$check" != --check ]; then
+  [ -n "${server:-}" ] || server=$(docker image inspect --format '{{ index .Config.Labels "tech.masivo.paykit-server" }}' "$server_image")
+  lock=$(curl -fsS "https://raw.githubusercontent.com/pubky/paykit-server/$server/Cargo.lock")
+  alignment=$(printf '%s' "$lock" | python3 scripts/paykit-lock.py --lock - --paykit-rev "$rev" --cache .marketplace/provenance)
+  mkdir -p .marketplace/provenance
+  printf '%s\n' "$alignment" > .marketplace/provenance/server-alignment.json
+  jq -n --arg server "$server" --arg paykit "$rev" --arg tag "v$version" --argjson alignment "$alignment" \
+    '{serverRevision:$server,paykitRevision:$paykit,paykitTag:$tag,locksRevision:$alignment.locks.revision,locksTag:$alignment.locks.tag}' > .marketplace/paykit-pins.json.tmp
+  mv .marketplace/paykit-pins.json.tmp .marketplace/paykit-pins.json
+fi
 exit 0

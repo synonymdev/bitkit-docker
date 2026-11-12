@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "app_id": "paykit-server",
+  "reader_pubky": "private-reader-marker",
+  "operation": {
+    "PaymentRequestProposal": {
+      "terms": {
+        "amount": "0.00002000",
+        "asset": "btc",
+        "rates": [],
+        "payment_reference": "private-reference",
+        "proposal_expires_at": null,
+        "payment_deadline": null,
+        "accepted_endpoint_identifiers": [
+          "btc-regtest-p2wpkh"
+        ],
+        "payment_endpoints": {
+          "btc-regtest-p2wpkh": "{\"value\":\"bcrt1qtestpayment1234567890\"}"
+        },
+        "metadata": "{\"bundle_id\": \"W34GRHX2NXFWJZHDMYNV8R4RQ8\", \"private_marker\": \"never-export-me\"}"
+      }
+    }
+  }
+}

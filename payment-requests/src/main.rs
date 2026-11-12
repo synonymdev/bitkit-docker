@@ -494,10 +494,20 @@ async fn act(State(app): State<Arc<App>>, action: &'static str, input: RecordInp
     let id = PaymentRequestId::new(input.payment_request_id)?;
     let record = match action {
         "accept" => {
-            app.sdk.claim_payment_request_for_execution(peer.clone(), &id).await?;
-            app.sdk
+            let _claimed = app.sdk.claim_payment_request_for_execution(peer.clone(), &id).await?;
+            #[cfg(feature = "versioned-payment-request-acceptance")]
+            let accepted = app.sdk
+                .accept_payment_request(
+                    peer.clone(),
+                    &id,
+                    _claimed.proposal_stream_item_id.ok_or_else(|| anyhow!("The received request has no proposal stream identity"))?,
+                )
+                .await?;
+            #[cfg(not(feature = "versioned-payment-request-acceptance"))]
+            let accepted = app.sdk
                 .accept_payment_request(peer.clone(), &id)
-                .await?
+                .await?;
+            accepted
         }
         "reject" => {
             app.sdk
