@@ -12,7 +12,7 @@ and [bitkit-android#1338](https://github.com/synonymdev/bitkit-android/pull/1338
 | Regtest bitcoind and Electrum on `tcp://127.0.0.1:60001` | the stack's `bitcoind` and `electrs` | as in `docker-compose.yml` |
 | Pubky static testnet: DHT, PKARR relay, HTTP relay, one homeserver with open signup | `pubky-testnet`, built from `marketplace/pubky-testnet/Dockerfile` | `pubky-testnet` crate 0.14.0 |
 | Homeserver and Paykit databases | `marketplace-postgres` | `postgres:16-alpine` |
-| Paykit Server | `paykit-server`, built from source with the upstream `Dockerfile.local` (classic builder without BuildKit, see below) | pubky/paykit-server `0ffd4da2` (head of [pubky/paykit-server#46](https://github.com/pubky/paykit-server/pull/46), not yet merged or released; image label `tech.masivo.paykit-server`), paykit-rs `7185ae7d` (v0.1.0-rc65, the version both apps pin; label `tech.masivo.paykit-rs`), locks-core `b3dc87c9` (v0.1.0-rc8) |
+| Paykit Server | `paykit-server`, built from source with the upstream `Dockerfile.local` (classic builder without BuildKit, see below) | pubky/paykit-server `b4419772` (head of [pubky/paykit-server#131](https://github.com/pubky/paykit-server/pull/131), not yet merged; image label `tech.masivo.paykit-server`) with `paykit-server-paykit-rs-rc8.patch`, paykit-rs `adbe24ac` (v0.1.1-rc8, the version both apps pin; label `tech.masivo.paykit-rs`), locks-core `3013d8c1` (v0.1.1-rc2) |
 | Purchase driver | `marketplace-driver`, run by `./pubky-marketplace` | `marketplace/driver/package-lock.json`, `@synonymdev/pubky` 0.14.0, Paykit helpers from the Paykit Server image (tagged with the same revision) |
 
 `./pubky-marketplace build` checks the pinned trees out under `.marketplace/sources` (git ignored) and
@@ -26,11 +26,11 @@ Paykit pin).
 
 ### Why these versions
 
-Current Bitkit builds (Paykit SDK rc65) take a Pubky write lock (`LOCK` and `UNLOCK` on the path) before they write Paykit state. The
+Current Bitkit builds (Paykit SDK 0.1.1-rc8) take a Pubky write lock (`LOCK` and `UNLOCK` on the path) before they write Paykit state. The
 homeserver of the earlier Pubky Core pin `f68014c1` answers `LOCK` with 405, so creating a profile or publishing Paykit data failed in the
 app. The 0.14.0 homeserver grants the locks.
 
-Paykit Server `0ffd4da` (#46) is on Pubky 0.14.0 and paykit-rs rc65 and keeps `/setup` with `x-bitkit-claim=watch-only-account-v1`;
+Paykit Server `b441977` (#131) is on Pubky 0.16.2 and, with the fixture's lock patch, paykit-rs 0.1.1-rc8, and keeps `/setup` with `x-bitkit-claim=watch-only-account-v1`;
 its setup flow emits the Pubky grant auth URL (`pubkyauth://signin_grant` with `cid` and `cpk`) that the apps accept. The driver's
 `setup-url` refuses any auth URL that is not `signin_grant` with `cid` and `cpk`, so a wrong pin fails before it reaches a wallet. The
 server's config names its Paykit app with `app_id` (paykit-rs has no receiver folders since rc59), and the driver reads the app registry
@@ -259,7 +259,8 @@ it reads `not_observable`: the fixture holds no key for the app's end of the lin
     (`paykit-server-reader-accepts-request-without-reader-metadata.patch` checks it only when present; still on master `f9c24db`).
 
   `fetch_sources` stops when a patch neither applies, nor is applied, nor names an upstream commit the tree contains.
-- **Paykit Server on an unmerged branch.** The apps pin paykit-rs rc65, and only pubky/paykit-server#46 (`0ffd4da`) builds Paykit
-  Server on rc65; master (`7ff868b`) is still on rc59. The fixture builds from #46's head until it merges or is released.
+- **Paykit Server on an unmerged branch and a lock patch.** The apps pin paykit-rs 0.1.1-rc8, and no Paykit Server revision locks it;
+  the nearest, pubky/paykit-server#131 (`b441977`), locks rc6. The fixture builds #131's head with
+  `paykit-server-paykit-rs-rc8.patch` (Cargo manifest, lock and the source-preparation pin) until an upstream revision locks rc8.
 - **Fixed container names.** The base services keep their fixed container names, so another checkout's
   stack with the same names must be removed first.
