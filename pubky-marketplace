@@ -197,12 +197,18 @@ check_lock_pins() {
 }
 
 # Fixes the fixture carries on top of the pinned Paykit Server tree until upstream has them (marketplace/patches, named in the
-# image label tech.masivo.paykit-server-patches). Each applies once; a patch whose `Upstream:` commit the pinned tree already contains
-# is skipped; a patch that neither applies nor is applied otherwise stops the build.
+# image label tech.masivo.paykit-server-patches). Each applies once; a patch with an `Applies-to:` commit is skipped on any other
+# PAYKIT_SERVER_REV; a patch whose `Upstream:` commit the pinned tree already contains is skipped; a patch that neither applies nor
+# is applied otherwise stops the build.
 apply_paykit_server_patches() {
-  local patch upstream
+  local patch upstream applies_to
   for patch in marketplace/patches/paykit-server-*.patch; do
     [ -e "$patch" ] || continue
+    applies_to=$(sed -n 's/^Applies-to: \([0-9a-f]\{40\}\).*/\1/p' "$patch")
+    if [ -n "$applies_to" ] && [ "$applies_to" != "$PAYKIT_SERVER_REV" ]; then
+      echo "skipped $(basename "$patch"): it applies only to paykit-server ${applies_to:0:8}"
+      continue
+    fi
     upstream=$(sed -n 's/^Upstream: \([0-9a-f]\{40\}\).*/\1/p' "$patch")
     if git -C "$SOURCES/paykit-server" apply --check "$PWD/$patch" 2>/dev/null; then
       git -C "$SOURCES/paykit-server" apply "$PWD/$patch"
