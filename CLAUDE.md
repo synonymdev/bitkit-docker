@@ -12,6 +12,7 @@ Bitkit Docker is a complete Docker-based development environment for Bitcoin and
 - **LNURL Server** - Main web application for LNURL protocols
 - **VSS Server** - Versioned Storage Service for wallet backup
 - **Pubky marketplace fixture** (`marketplace` compose profile) - Pubky testnet, Paykit Server and a purchase driver, run through `./pubky-marketplace`
+- **Spark regtest** (`spark` compose profile) - Spark operators, the Spark service provider and mempool.space, run through `./spark` (see docs/spark-regtest.md)
 
 ## Repository Structure
 
@@ -34,6 +35,8 @@ bitkit-docker/
 ├── lnd/                    # LND configuration and data
 ├── pubky-marketplace       # CLI for the Pubky marketplace fixture (see docs/pubky-marketplace.md)
 ├── marketplace/            # Fixture assets: Pubky testnet Dockerfile, homeserver config, driver (Node)
+├── spark                   # CLI for the Spark regtest profile (see docs/spark-regtest.md)
+├── spark-regtest/          # Spark profile: compose.yml (included by docker-compose.yml), dockerfiles, scripts adapted from breez/spark-sdk
 ├── vss-server/             # VSS server (git submodule)
 └── sql/                    # Database schemas
 ```

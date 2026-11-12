@@ -4,6 +4,7 @@ const { rpc } = require('./rpc.cjs');
 const { state, urls } = require('./config.cjs');
 async function main() {
   const [command = 'help', ...args] = process.argv.slice(2);
+  if (command === 'reset-smoke') return require('./reset-smoke.cjs').smoke();
   if (command === 'max-smoke') return require('./max-smoke.cjs').smoke();
   if (command === 'smoke') return require('./smoke.cjs').smoke();
   if (command === 'bridge-smoke') return require('./bridge-smoke.cjs').smoke();

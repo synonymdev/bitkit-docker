@@ -24,6 +24,19 @@ upstream reads and excludes pre-fork mainnet logs. Payment history and recovery
 cover transfers made locally after the fork; use disposable test wallets.
 Requires Docker Compose, Git access to the pinned Core/service repositories, jq
 and tar. Builds and tools run inside containers; no host Node or Rust is needed.
+Anvil keeps the latest 128 historical states in memory and does not persist historical
+states to disk. Local transaction receipts and logs remain available for wallet history,
+recovery and payment proofs; RPC queries requiring older account/storage state are
+outside this retention window. Fork RPC caching remains enabled.
+The `smoke` check mines 256 blocks in sequential batches of 16 to keep RPC requests
+short on slower hosts, then checks history recovery and proofs beyond the retention
+window. Validate with `./usdt-fixture check`,
+`./usdt-fixture smoke`, `./usdt-fixture max-smoke` and `./usdt-fixture bridge-smoke`.
+Run `./usdt-fixture reset-smoke` to check MAX quotes and settlement before and after repeated
+chain resets without restarting Alto. This resets the chain; use a dedicated
+disposable stack. Startup captures the reset snapshot after Alto deploys its
+simulation contracts, so reset preserves those contracts.
+
 The local gateway raises both total and payment-preparation rate limits for shared
 automated runs. These overrides are test-only; production limits are covered by
 the service tests.
@@ -49,6 +62,7 @@ payment controls, proof verification, the optional Shop overlay and simulation l
 - **Homegate**: Pubky Homeserver signup gatekeeper with local admin API mock
 - **Pubky marketplace fixture** (opt-in `marketplace` profile): Pubky testnet, Paykit Server and a purchase driver for the marketplace wallet journey
 - **Payment Request fixture** (opt-in `payment-requests` profile): rc65 issuer and controlled peer on the marketplace Pubky testnet
+- **Spark regtest** (opt-in `spark` profile, `./spark`): Spark operators, the Spark service provider and mempool.space on this chain, for local Spark development, offline E2E and emergency-exit tests
 
 ## Quick Start
 
@@ -201,6 +215,10 @@ Every host port is 1024 or above. The ports Bitkit, the Pubky SDK or Bitkit's UI
 | `fixture-issuer`, `rc56-peer` (`payment-requests`) | 23012, 23013 | 3012, 3013 |
 | Paykit Server, quick tunnel metrics (`shop-mixed`) | 23110, 23111 | 3001, 23111 |
 | Lock Server, marketplace service, Shop, and their tunnel metrics (`shop-order`) | 23120, 23130, 23140; 23121, 23131, 23141 | 3000, 8080, 3000 |
+| Spark operators (`spark`, through `spark-operator-proxy`) | 23535, 23536, 23537 | 8535, 8536, 8537 |
+| Spark service provider (`spark`) | 23049 | 59049 |
+| mempool.space explorer and chain API (`spark`) | 23090 | 80 |
+| Spark LNURL server, data-sync gRPC and gRPC-Web (`spark`) | 23083; 23081, 23082 | 8080; 8081, 8082 |
 
 ## API Examples
 
@@ -682,6 +700,32 @@ Open the dashboard at `Settings -> Advanced -> Trezor Hardware Wallet`, then che
 
 See [docs/trezor-emulator.md](docs/trezor-emulator.md) for helper internals, environment overrides, and troubleshooting commands.
 
+#### Spark Regtest and Emergency Exits
+
+The `spark` profile runs a Spark network of your own on this chain: three Spark operators (the last public operator, `breez/spark@b54845c`, patched), the Spark service provider and its Lightning nodes from `breez/spark-sdk@7b6124227` (patched for Spark SDK 0.28 wallets), and mempool.space as the explorer and chain API. Use it for local Spark development, offline E2E and emergency-exit tests with stopped operators; shared CI stays on Lightspark's hosted regtest. [docs/spark-regtest.md](docs/spark-regtest.md) has the details.
+
+```bash
+./spark up                          # build and start, then wait until a wallet can connect (the first start takes a while)
+./spark config                      # the Spark config a wallet connects with; --base64 for a build variable
+./spark pay <bolt11> [sats]         # fund a wallet's Spark balance over Lightning from Alice
+./spark send <address> <sats>       # pay a Spark deposit, Savings or exit funding address and mine 1 block
+./spark operators stop              # uncooperative operators: stop all three (start brings them back)
+./spark mine 1                      # confirm the next exit package
+./spark mature                      # mine 2,000 blocks, past every Spark refund timelock
+./spark tx <txid>                   # an exit transaction's status and the spends of its outputs
+```
+
+- **Mine with `./spark`.** Spark's transactions relay only through `spark-bitcoind` (Bitcoin Core 31), which follows `bitcoind` over P2P. A block from `./bitcoin-cli mine` leaves them unconfirmed.
+- **Dev build.** Build with `SPARK_LOCAL_CONFIG_B64="$(./spark config --base64)"` and `SPARK_LOCAL_CHAIN_URL=http://127.0.0.1:23090/api`. The apps read these settings only once their local Spark setting changes land; until then a build needs them patched in ([docs/spark-regtest.md](docs/spark-regtest.md#point-a-bitkit-dev-build-at-it)). On iOS, they can also go to a simulator launch as `SIMCTL_CHILD_` variables. The app's ldk-node stays on Electrum `tcp://127.0.0.1:60001`.
+- **Android emulator.** Run `adb reverse tcp:<port> tcp:<port>` for 23535, 23536, 23537, 23049, 23090 and 60001.
+- **iOS simulator.** The `127.0.0.1` URLs work as they are.
+- **Exit test.**
+  1. Fund the wallet on Spark.
+  2. Run `./spark operators stop`.
+  3. Start the emergency exit, and `./spark send` the fee funding it asks for.
+  4. Run `./spark mine` once per package, until the app waits for the timelock.
+  5. Run `./spark mature`, then `./spark mine` for the refunds and the sweep to Savings.
+
 #### Pubky Marketplace Journey
 
 Use this section for the Bitkit marketplace wallet journey (`journeys/pubky-marketplace` in [bitkit-ios](https://github.com/synonymdev/bitkit-ios/tree/master/journeys/pubky-marketplace) and [bitkit-android](https://github.com/synonymdev/bitkit-android/tree/master/journeys/pubky-marketplace)). The `marketplace` profile adds the integration fixture that the journey lists: a Pubky testnet, Paykit Server `722ef268` (v0.1.0-rc4) with `/setup` and `x-bitkit-claim=watch-only-account-v1`, and a purchase driver. That revision emits the Pubky grant auth URL (`pubkyauth://signin_grant` with `cid` and `cpk`) that the apps' Paykit SDK (0.1.0-rc55) requires; the merge of [pubky/paykit-server#2](https://github.com/pubky/paykit-server/pull/2) (`867fc883`) emits the legacy URL, which the apps reject. It reuses this stack's regtest `bitcoind` and Electrum on `tcp://127.0.0.1:60001`. A plain `docker compose up -d` does not start it, and `./pubky-marketplace` starts only the chain and fixture services, so run it without the full stack. It needs Docker, `git`, `curl` and `jq` on the host, and outbound internet during the first build and during setup approval (see the setup relay note in [docs/pubky-marketplace.md](docs/pubky-marketplace.md)).
@@ -1151,6 +1195,32 @@ is published; build the run's rc4-pinned companion with `--refresh-dependencies`
 and its existing Maven authentication. No local-AAR substitute is needed.
 The test run owns app installation, MAX review and deadline-expiry proof on its
 lane's devices. No device is launched on the coordinator.
+
+## Public staging
+
+`staging/` deploys Bitkit's public regtest staging without Blocktank: VSS, LNURL-auth, a regtest bitcoind, mempool and its electrs (explorer, Esplora REST and Electrum over TLS), a faucet and miner at Blocktank's `/regtest/chain/deposit` and `mine` paths, the fx-rates relay and the RN backup server, behind one Caddy. It keeps `*.stag0.blocktank.to`'s paths, so apps and tests switch by host.
+
+Needs Docker with Compose, ports 80, 443 and 9999 open, and DNS records for the three hostnames.
+
+```bash
+git clone https://github.com/synonymdev/bitkit-docker.git
+git clone https://github.com/synonymdev/lnurl-auth-server.git   # private; staging builds it from this sibling checkout
+cd bitkit-docker
+git submodule update --init vss-server
+cd staging
+./init.sh                 # .env with fresh passwords and keys, JWT key pair in secrets/
+$EDITOR .env              # STAGING_HOST, MEMPOOL_HOST, ELECTRUM_HOST, ACME_EMAIL
+docker compose up -d --build
+```
+
+Check it is up (the faucet reports its height and balance once it funded itself):
+
+```bash
+docker compose ps
+curl -s https://<staging-host>/health   # {"height":…,"balanceSat":…}
+```
+
+[docs/staging.md](docs/staging.md) has the endpoints, what Bitkit still calls on stag0, the settings to change, the migration checklist and smoke checks.
 
 ## Production Considerations
 

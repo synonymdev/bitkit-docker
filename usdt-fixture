@@ -75,7 +75,7 @@ ENV
   wallet)
     compose run --rm --no-deps -e USDT_WALLET_NAME="${USDT_WALLET_NAME:-sender}" usdt-tools wallet "$@"
     ;;
-  smoke|max-smoke|bridge-smoke|status|balance|fund|mine|reset|provider-mode|bundling|bundle|orchestra|layerzero|layerzero-mode)
+  smoke|max-smoke|bridge-smoke|reset-smoke|status|balance|fund|mine|reset|provider-mode|bundling|bundle|orchestra|layerzero|layerzero-mode)
     compose run --rm --no-deps usdt-tools "$command" "$@"
     ;;
   help|-h|--help)
@@ -87,6 +87,7 @@ Usage: ./usdt-fixture <command>
   down              Remove this project's containers, disposable wallets and fork cache
   env               Print app/helper endpoint exports
   check             Run fixture lint and protocol tests inside Docker (stack must be up)
+  reset-smoke       Check MAX settlement before and after repeated resets without restarting Alto
   max-smoke         Check MAX quotes, settlement and actual fees
   smoke             Check real Core payments, fees, pending recovery and proofs
   bridge-smoke      Check local bridge funding, receipts and refunds

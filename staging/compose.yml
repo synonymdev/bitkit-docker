@@ -1,0 +1,212 @@
+# Bitkit staging: a public regtest backend with no Blocktank part. Replaces *.stag0.blocktank.to.
+# docs/staging.md has the endpoints, the app and test settings, the migration checklist and the deploy steps.
+# Only caddy publishes ports (80, 443, 9999); every other service stays on the compose network.
+name: bitkit-staging
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  bitcoind:
+    <<: *restart
+    image: btcpayserver/bitcoin:26.0
+    volumes:
+      - bitcoin:/home/bitcoin/.bitcoin
+    environment:
+      BITCOIN_NETWORK: regtest
+      BITCOIN_EXTRA_ARGS: |
+        rpcport=43782
+        rpcbind=0.0.0.0:43782
+        rpcallowip=0.0.0.0/0
+        rpcuser=${BITCOIN_RPC_USER}
+        rpcpassword=${BITCOIN_RPC_PASSWORD}
+        port=39388
+        whitelist=0.0.0.0/0
+        txindex=1
+        fallbackfee=0.00002
+    healthcheck:
+      test: ['CMD', 'bitcoin-cli', '-regtest', '-rpcport=43782', '-rpcuser=${BITCOIN_RPC_USER}', '-rpcpassword=${BITCOIN_RPC_PASSWORD}', 'getblockchaininfo']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # Funds the faucet wallet on a fresh chain and serves Blocktank's /regtest/chain/{deposit,mine}
+  faucet:
+    <<: *restart
+    build: ./faucet
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+    environment:
+      BITCOIN_RPC_URL: http://bitcoind:43782
+      BITCOIN_RPC_USER: ${BITCOIN_RPC_USER}
+      BITCOIN_RPC_PASSWORD: ${BITCOIN_RPC_PASSWORD}
+      FAUCET_AUTH: ${FAUCET_AUTH:?run ./init.sh to set FAUCET_AUTH}
+      FAUCET_RATE_PER_MIN: ${FAUCET_RATE_PER_MIN:-20}
+      FAUCET_WALLET: ${FAUCET_WALLET:-faucet}
+      FAUCET_DEFAULT_SAT: ${FAUCET_DEFAULT_SAT:-100000}
+      FAUCET_MAX_SAT: ${FAUCET_MAX_SAT:-10000000}
+      FAUCET_MAX_BLOCKS: ${FAUCET_MAX_BLOCKS:-100}
+
+  # mempool's electrs fork: Electrum (60001, TLS on 9999 through caddy) and Esplora REST (3000, /electrs)
+  electrs:
+    <<: *restart
+    image: mempool/electrs:v3.3.0
+    depends_on:
+      bitcoind:
+        condition: service_healthy
+    volumes:
+      - electrs:/electrs
+    command:
+      - --network=regtest
+      - --daemon-rpc-addr=bitcoind:43782
+      - --cookie=${BITCOIN_RPC_USER}:${BITCOIN_RPC_PASSWORD}
+      - --jsonrpc-import
+      - --daemon-dir=/tmp
+      - --db-dir=/electrs
+      - --electrum-rpc-addr=0.0.0.0:60001
+      - --http-addr=0.0.0.0:3000
+
+  mempool-db:
+    <<: *restart
+    image: mariadb:10.11
+    volumes:
+      - mempool-db:/var/lib/mysql
+    environment:
+      MYSQL_DATABASE: mempool
+      MYSQL_USER: mempool
+      MYSQL_PASSWORD: ${MEMPOOL_DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MEMPOOL_DB_ROOT_PASSWORD}
+    healthcheck:
+      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  mempool-api:
+    <<: *restart
+    image: mempool/backend:v3.2.1
+    depends_on:
+      mempool-db:
+        condition: service_healthy
+      electrs:
+        condition: service_started
+    environment:
+      MEMPOOL_BACKEND: esplora
+      MEMPOOL_NETWORK: mainnet
+      ESPLORA_REST_API_URL: http://electrs:3000
+      CORE_RPC_HOST: bitcoind
+      CORE_RPC_PORT: '43782'
+      CORE_RPC_USERNAME: ${BITCOIN_RPC_USER}
+      CORE_RPC_PASSWORD: ${BITCOIN_RPC_PASSWORD}
+      DATABASE_ENABLED: 'true'
+      DATABASE_HOST: mempool-db
+      DATABASE_DATABASE: mempool
+      DATABASE_USERNAME: mempool
+      DATABASE_PASSWORD: ${MEMPOOL_DB_PASSWORD}
+      STATISTICS_ENABLED: 'true'
+
+  mempool-web:
+    <<: *restart
+    image: mempool/frontend:v3.2.1
+    depends_on:
+      mempool-api:
+        condition: service_started
+        restart: true # nginx resolves the backend once at start
+    environment:
+      FRONTEND_HTTP_PORT: '8080'
+      BACKEND_MAINNET_HTTP_HOST: mempool-api
+
+  vss-db:
+    <<: *restart
+    image: postgres:15-alpine
+    volumes:
+      - vss-db:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${VSS_DB_PASSWORD}
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  vss:
+    <<: *restart
+    build:
+      context: ..
+      dockerfile: vss/Dockerfile
+    depends_on:
+      vss-db:
+        condition: service_healthy
+    environment:
+      VSS_SERVER_HOST: 0.0.0.0
+      VSS_SERVER_PORT: '5050'
+      VSS_POSTGRESQL_HOST: vss-db
+      VSS_POSTGRESQL_PORT: '5432'
+      VSS_POSTGRESQL_USERNAME: postgres
+      VSS_POSTGRESQL_PASSWORD: ${VSS_DB_PASSWORD}
+      VSS_JWT_PUBLIC_KEY_FILE: /app/jwt-public.pem
+    volumes:
+      - ../vss-server-config.toml:/app/vss-server-config.toml:ro
+      - ./secrets/jwt-public.pem:/app/jwt-public.pem:ro
+
+  lnurl-auth:
+    <<: *restart
+    build: ${LNURL_AUTH_SERVER_SRC:-../../lnurl-auth-server}
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: '5005'
+      SERVER_DOMAIN: https://${STAGING_HOST}/lnurl_auth
+      JWT_PRIVATE_KEY_PATH: /app/keys/private.pem
+      JWT_PUBLIC_KEY_PATH: /app/keys/public.pem
+      JWT_EXPIRES_IN: 24h
+      DB_PATH: /app/data/auth.db
+      LOG_LEVEL: info
+    volumes:
+      - ./secrets/jwt-private.pem:/app/keys/private.pem:ro
+      - ./secrets/jwt-public.pem:/app/keys/public.pem:ro
+      - lnurl-auth:/app/data
+
+  # RN app backups for the RN-to-native migration (stag0's /backups-ldk)
+  ldk-backup:
+    <<: *restart
+    image: synonymsoft/ldk-backup-server:0.0.146
+    environment:
+      HOST: 0.0.0.0
+      PORT: '3003'
+      SECRET_KEY: ${LDK_BACKUP_SECRET_KEY}
+      PUBLIC_KEY: ${LDK_BACKUP_PUBLIC_KEY}
+    volumes:
+      - ldk-backup:/app/local-storage
+
+  caddy:
+    <<: *restart
+    build: ./caddy
+    ports:
+      - '80:80'
+      - '443:443'
+      - '9999:9999'
+    environment:
+      STAGING_HOST: ${STAGING_HOST}
+      MEMPOOL_HOST: ${MEMPOOL_HOST}
+      ELECTRUM_HOST: ${ELECTRUM_HOST}
+      ACME_EMAIL: ${ACME_EMAIL}
+      CADDY_GLOBAL_OPTIONS: ${CADDY_GLOBAL_OPTIONS:-}
+      FX_UPSTREAM_ORIGIN: ${FX_UPSTREAM_ORIGIN:-https://api1.blocktank.to}
+      FX_UPSTREAM_PATH: ${FX_UPSTREAM_PATH:-/api/fx/rates/btc}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  bitcoin:
+  electrs:
+  mempool-db:
+  vss-db:
+  lnurl-auth:
+  ldk-backup:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,485 @@
+# The `spark` profile: a local Spark regtest network on bitkit-docker's chain. Three Spark operators, the Spark
+# service provider (SSP) with its Lightning node and Alice (a second node it holds a channel with), an LNURL server, a
+# data-sync service and mempool.space as the explorer and chain API. `./spark up` starts it, docs/spark-regtest.md
+# explains it.
+#
+# Adapted from breez/spark-sdk's regtest/local (MIT, see spark-regtest/README.md):
+# - The operators are the last public Spark operator, breez/spark@b54845c, with one patch (operator.dockerfile).
+# - The SSP, its Lightning node and the LNURL server are built from spark-sdk 7b6124227, the last commit on that
+#   operator; a newer SSP cannot talk to it. The SSP carries one backport so Spark SDK 0.28 wallets work (sspd.dockerfile).
+# - spark-bitcoind is Bitcoin Core 31 peered with bitkit-docker's bitcoind, so both share one chain. Spark's
+#   transactions (v3 with P2A anchors, package relay) need Core 29 or later to relay, which the 26.0 node is not.
+#   Mine with `./spark mine` so they confirm: blocks mined on bitcoind leave them in spark-bitcoind's mempool.
+#
+# Every service is prefixed `spark-` and published in 23000-23999 (README "Ports").
+
+x-spark-tools: &spark-tools
+  image: bitkit-spark-tools:7b61242
+  profiles: [spark]
+  build:
+    context: .
+    dockerfile: tools.dockerfile
+    additional_contexts:
+      sspd: service:spark-sspd
+      ldk_server: service:spark-ldk-server
+  env_file: spark.env
+  environment: &spark-tools-env
+    LOCAL_DIR: /local
+    OUT_DIR: /out
+    BITCOIND_RPC_URL: http://spark-bitcoind:18443
+    MAIN_BITCOIND_RPC_URL: http://bitcoind:43782
+    MAIN_BITCOIND_RPC_USER: polaruser
+    MAIN_BITCOIND_RPC_PASSWORD: polarpass
+    SSP_GRPC_URI: http://spark-sspd:59050
+    CHAIN_API_URL: http://spark-mempool/api
+    LNURL_URL: http://spark-lnurl:8080
+    DATA_SYNC_WEB_URL: http://spark-data-sync:8082
+  volumes:
+    - spark_local:/local
+    - ./data:/out
+
+x-spark-operator: &spark-operator
+  image: bitkit-spark-operator:b54845c
+  profiles: [spark]
+  build:
+    context: .
+    dockerfile: operator.dockerfile
+    additional_contexts:
+      itest: https://github.com/breez/spark-sdk.git#7b61242274e068861d66dc6de7527671e2926cf0:crates/spark-itest/docker
+  restart: unless-stopped
+  volumes:
+    - spark_local:/local:ro
+    - ./scripts:/scripts:ro
+  healthcheck:
+    test: [CMD, /scripts/operator-ready.sh]
+    interval: 5s
+    # Generating keyshares takes minutes.
+    start_period: 2400s
+  environment: &spark-operator-env
+    SPARK_THRESHOLD: '2'
+    POSTGRES_HOST: spark-postgres
+    POSTGRES_PORT: '5432'
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    BITCOIND_HOST: spark-bitcoind:18443
+    BITCOIND_ZMQPUBRAWBLOCK: tcp://spark-bitcoind:28332
+    OPERATORS_JSON: /local/operators.json
+    SERVER_CERT: /local/certs/server.crt
+    SERVER_KEY: /local/certs/server.key
+    # The SSP reserves over 10,000 keyshares for its leaf pool.
+    DKG_MIN_AVAILABLE_KEYS: ${SPARK_DKG_MIN_AVAILABLE_KEYS:-12000}
+    DKG_BATCH_SIZE: '2000'
+
+x-spark-ldk-node: &spark-ldk-node
+  image: bitkit-spark-ldk-server:7b61242
+  profiles: [spark]
+  build:
+    context: https://github.com/breez/spark-sdk.git#7b61242274e068861d66dc6de7527671e2926cf0:crates/spark-itest/docker
+    dockerfile: ldk-server.dockerfile
+  restart: unless-stopped
+  healthcheck:
+    test: [CMD, test, -f, /data/tls.crt]
+    interval: 2s
+    retries: 30
+
+x-spark-migrations: &spark-migrations
+  image: bitkit-spark-migrations:b54845c
+  profiles: [spark]
+  build:
+    context: .
+    dockerfile: migrations.dockerfile
+  depends_on:
+    spark-postgres:
+      condition: service_healthy
+
+services:
+  spark-init:
+    <<: *spark-tools
+    command: [/scripts/init.sh]
+    environment:
+      <<: *spark-tools-env
+      OPERATOR_ADDRESSES: spark-so-0:8535 spark-so-1:8535 spark-so-2:8535
+      OPERATOR_PUBLIC_PORTS: 23535 23536 23537
+      SSP_PUBLIC_PORT: '23049'
+      SSP_ADDRESS: spark-sspd:59049
+      PUBLIC_HOST: ${SPARK_PUBLIC_HOST:-127.0.0.1}
+      LDK_BITCOIND_RPC_ADDRESS: spark-bitcoind:18443
+      LDK_SSP_DIR: /data
+      LDK_SSP_SEED_DIR: /ldk-ssp
+      LDK_GRPC_ADDRESS: 0.0.0.0:3536
+      LDK_TLS_HOST: spark-ldk-server
+      LDK_ALICE_DIR: /data
+      LDK_ALICE_SEED_DIR: /ldk-alice
+      LDK_ALICE_GRPC_ADDRESS: 0.0.0.0:3536
+      LDK_ALICE_LISTEN_PORT: '9735'
+      LDK_ALICE_TLS_HOST: spark-ldk-alice
+    volumes:
+      - spark_local:/local
+      - spark_ldk_data:/ldk-ssp
+      - spark_ldk_alice_data:/ldk-alice
+      - ./data:/out
+
+  spark-bitcoind:
+    image: bitcoin/bitcoin:31.0
+    profiles: [spark]
+    restart: unless-stopped
+    command:
+      - -regtest
+      - -server
+      - -txindex
+      - -addresstype=bech32
+      - -fallbackfee=0.00000253
+      - -rpcport=18443
+      - -rpcuser=rpcuser
+      - -rpcpassword=rpcpassword
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -zmqpubrawblock=tcp://0.0.0.0:28332
+      - -zmqpubrawtx=tcp://0.0.0.0:28333
+      # bitkit-docker's bitcoind, whose chain this follows.
+      - -addnode=bitcoind:39388
+    volumes:
+      - spark_bitcoind:/home/bitcoin/.bitcoin
+    healthcheck:
+      test: [CMD, bitcoin-cli, -regtest, -rpcport=18443, -rpcuser=rpcuser, -rpcpassword=rpcpassword, getblockchaininfo]
+      interval: 2s
+      retries: 30
+
+  # Mines on request (`./spark mine`), and every 5 s while the stack sets up. SPARK_BLOCK_INTERVAL_SECONDS above 0 keeps
+  # mining at that interval.
+  spark-miner:
+    <<: *spark-tools
+    command: [/scripts/miner.sh]
+    restart: unless-stopped
+    environment:
+      <<: *spark-tools-env
+      BLOCK_INTERVAL_SECONDS: ${SPARK_BLOCK_INTERVAL_SECONDS:-0}
+    depends_on:
+      spark-bitcoind:
+        condition: service_healthy
+
+  spark-postgres:
+    image: postgres:16-alpine
+    profiles: [spark]
+    restart: unless-stopped
+    command: [postgres, -c, max_connections=300]
+    environment:
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - spark_postgres:/var/lib/postgresql/data
+      - ./config/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: [CMD, pg_isready, -h, 127.0.0.1, -U, postgres]
+      interval: 2s
+      retries: 30
+
+  spark-migrations-0:
+    <<: *spark-migrations
+    command: [migrate, apply, --url, 'postgres://postgres:postgres@spark-postgres:5432/sparkoperator_0?sslmode=disable']
+  spark-migrations-1:
+    <<: *spark-migrations
+    command: [migrate, apply, --url, 'postgres://postgres:postgres@spark-postgres:5432/sparkoperator_1?sslmode=disable']
+  spark-migrations-2:
+    <<: *spark-migrations
+    command: [migrate, apply, --url, 'postgres://postgres:postgres@spark-postgres:5432/sparkoperator_2?sslmode=disable']
+
+  spark-so-0:
+    <<: *spark-operator
+    environment:
+      <<: *spark-operator-env
+      SPARK_OPERATOR_INDEX: '0'
+      SPARK_OPERATOR_KEY: '0101010101010101010101010101010101010101010101010101010101010101'
+    depends_on: &spark-operator-depends-on
+      spark-init:
+        condition: service_completed_successfully
+      spark-bitcoind:
+        condition: service_healthy
+      spark-migrations-0:
+        condition: service_completed_successfully
+      spark-migrations-1:
+        condition: service_completed_successfully
+      spark-migrations-2:
+        condition: service_completed_successfully
+  spark-so-1:
+    <<: *spark-operator
+    environment:
+      <<: *spark-operator-env
+      SPARK_OPERATOR_INDEX: '1'
+      SPARK_OPERATOR_KEY: '0202020202020202020202020202020202020202020202020202020202020202'
+    depends_on: *spark-operator-depends-on
+  spark-so-2:
+    <<: *spark-operator
+    environment:
+      <<: *spark-operator-env
+      SPARK_OPERATOR_INDEX: '2'
+      SPARK_OPERATOR_KEY: '0303030303030303030303030303030303030303030303030303030303030303'
+    depends_on: *spark-operator-depends-on
+
+  # Serves the operators to wallets over plain HTTP. It stays up while `./spark operators stop` stops them, so a wallet
+  # sees operators that do not answer.
+  spark-operator-proxy:
+    image: nginx:1.27-alpine
+    profiles: [spark]
+    restart: unless-stopped
+    volumes:
+      - ./config/operator-proxy-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - '23535:8535'
+      - '23536:8536'
+      - '23537:8537'
+
+  spark-ldk-server:
+    <<: *spark-ldk-node
+    command: [/local/ldk-ssp.toml]
+    volumes:
+      - spark_local:/local:ro
+      - spark_ldk_data:/data
+    depends_on:
+      spark-init:
+        condition: service_completed_successfully
+      spark-bitcoind:
+        condition: service_healthy
+
+  spark-ldk-alice:
+    <<: *spark-ldk-node
+    command: [/local/ldk-alice.toml]
+    volumes:
+      - spark_local:/local:ro
+      - spark_ldk_alice_data:/data
+    depends_on:
+      spark-init:
+        condition: service_completed_successfully
+      spark-bitcoind:
+        condition: service_healthy
+
+  spark-lightning:
+    <<: *spark-tools
+    command: [/scripts/lightning.sh]
+    restart: on-failure
+    environment:
+      <<: *spark-tools-env
+      SSP_NODE_ADDRESS: spark-ldk-server:9735
+      SSP_BASE_URL: spark-ldk-server:3536
+      SSP_TLS_CERT: /ldk-ssp/tls.crt
+      ALICE_BASE_URL: spark-ldk-alice:3536
+      CHANNEL_SATS: ${SPARK_CHANNEL_SATS:-50000000}
+    volumes:
+      - spark_local:/local
+      - spark_ldk_alice_data:/data:ro
+      - spark_ldk_data:/ldk-ssp:ro
+    depends_on:
+      spark-ldk-server:
+        condition: service_healthy
+      spark-ldk-alice:
+        condition: service_healthy
+      spark-miner:
+        condition: service_started
+
+  spark-sspd:
+    image: bitkit-spark-sspd:7b61242
+    profiles: [spark]
+    build:
+      context: .
+      dockerfile: sspd.dockerfile
+      additional_contexts:
+        sdk: https://github.com/breez/spark-sdk.git#7b61242274e068861d66dc6de7527671e2926cf0
+    restart: unless-stopped
+    environment:
+      SSPD_DB_URL: postgres://postgres:postgres@spark-postgres:5432/sspd
+      SSPD_BITCOIND_RPC_PASSWORD: rpcpassword
+      SSPD_WALLET_SEED: '0505050505050505050505050505050505050505050505050505050505050505'
+      SSPD_LDK_SERVER_API_KEY: '3b3665164439cc5c328d9171cfbdc3af29e3c41c96df28364756f47c3752f51d'
+      SSPD_LDK_SERVER_INVOICE_SIGNING_KEY: '7bbe27e39e948222a53a24aba8360673802a308a6374e232c5cf1a525312859a'
+    command:
+      - --config=/local/sspd.toml
+      - --address=0.0.0.0:59049
+      - --internal-address=0.0.0.0:59050
+      - --network=regtest
+      - --auto-migrate
+      - --chain-poll-interval-seconds=1
+      - --bitcoind-rpc-address=http://spark-bitcoind:18443
+      - --bitcoind-rpc-user=rpcuser
+      - --leaves-per-denomination=8
+      - --max-denomination-power=16
+      - --ldk-server-url=spark-ldk-server:3536
+      - --ldk-server-cert-path=/ldk/tls.crt
+    volumes:
+      - spark_local:/local:ro
+      - spark_ldk_data:/ldk:ro
+    # The internal API (59050) spends the SSP's funds without authentication, so it is not published.
+    ports:
+      - '23049:59049'
+    depends_on:
+      spark-postgres:
+        condition: service_healthy
+      spark-so-0:
+        condition: service_healthy
+      spark-so-1:
+        condition: service_healthy
+      spark-so-2:
+        condition: service_healthy
+      spark-ldk-server:
+        condition: service_healthy
+
+  # Serves the lightning addresses wallets register with it, with invoices from the SSP.
+  spark-lnurl:
+    image: bitkit-spark-lnurl:7b61242
+    profiles: [spark]
+    build:
+      context: https://github.com/breez/spark-sdk.git#7b61242274e068861d66dc6de7527671e2926cf0
+      dockerfile: crates/breez-sdk/lnurl/Dockerfile
+    restart: unless-stopped
+    environment:
+      BREEZ_LNURL_NETWORK: regtest
+      BREEZ_LNURL_SPARK_CONFIG: /local/spark-config-internal.json
+      BREEZ_LNURL_DB_URL: postgres://postgres:postgres@spark-postgres:5432/lnurl
+      BREEZ_LNURL_AUTO_MIGRATE: 'true'
+      BREEZ_LNURL_SCHEME: http
+      BREEZ_LNURL_DOMAINS: ${SPARK_PUBLIC_HOST:-127.0.0.1}:23083,127.0.0.1:23083,localhost:23083,10.0.2.2:23083
+      BREEZ_LNURL_SSP_AUTH_SEED: '0606060606060606060606060606060606060606060606060606060606060606'
+      BREEZ_LNURL_MAX_REGISTRATIONS_PER_DAY: '0'
+    volumes:
+      - spark_local:/local:ro
+    ports:
+      - '23083:8080'
+    depends_on:
+      spark-init:
+        condition: service_completed_successfully
+      spark-postgres:
+        condition: service_healthy
+      spark-sspd:
+        condition: service_started
+
+  # Keeps a wallet's data in step across its devices.
+  spark-data-sync:
+    image: bitkit-spark-data-sync:adaa7b1
+    profiles: [spark]
+    build:
+      context: https://github.com/breez/data-sync.git#adaa7b1df8bd37a9a34efe09373ff7fa81c4668e
+    restart: unless-stopped
+    environment:
+      GRPC_LISTEN_ADDRESS: 0.0.0.0:8081
+      GRPC_WEB_LISTEN_ADDRESS: 0.0.0.0:8082
+      SQLITE_DIR_PATH: /data
+    volumes:
+      - spark_data_sync:/data
+    ports:
+      - '23081:8081'
+      - '23082:8082'
+
+  spark-electrs:
+    image: mempool/electrs:v3.3.0
+    profiles: [spark]
+    restart: unless-stopped
+    command:
+      - --network=regtest
+      - --daemon-rpc-addr=spark-bitcoind:18443
+      - --cookie=rpcuser:rpcpassword
+      - --jsonrpc-import
+      - --db-dir=/electrs
+      - --http-addr=0.0.0.0:3002
+      - --electrum-rpc-addr=0.0.0.0:60401
+    volumes:
+      - spark_electrs:/electrs
+    depends_on:
+      spark-bitcoind:
+        condition: service_healthy
+
+  spark-mempool-api:
+    image: mempool/backend:v3.3.1
+    profiles: [spark]
+    restart: unless-stopped
+    environment:
+      MEMPOOL_NETWORK: regtest
+      MEMPOOL_BACKEND: esplora
+      ESPLORA_REST_API_URL: http://spark-electrs:3002
+      CORE_RPC_HOST: spark-bitcoind
+      CORE_RPC_PORT: '18443'
+      CORE_RPC_USERNAME: rpcuser
+      CORE_RPC_PASSWORD: rpcpassword
+      # With a database, the first start fetches the mining pool list from GitHub and exits when it cannot.
+      DATABASE_ENABLED: 'false'
+      STATISTICS_ENABLED: 'false'
+      FIAT_PRICE_ENABLED: 'false'
+    depends_on:
+      spark-electrs:
+        condition: service_started
+
+  spark-mempool-web:
+    image: mempool/frontend:v3.3.1
+    profiles: [spark]
+    restart: unless-stopped
+    environment:
+      FRONTEND_HTTP_PORT: '8080'
+      BACKEND_MAINNET_HTTP_HOST: spark-mempool-api
+      ROOT_NETWORK: regtest
+      REGTEST_ENABLED: 'true'
+      MAINNET_ENABLED: 'false'
+      MINING_DASHBOARD: 'false'
+    depends_on:
+      spark-mempool-api:
+        condition: service_started
+
+  # The explorer at /, and the chain API the SDK and the apps' exit broadcaster use at /api.
+  spark-mempool:
+    image: nginx:1.27-alpine
+    profiles: [spark]
+    restart: unless-stopped
+    volumes:
+      - ./config/mempool-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - '23090:80'
+    depends_on:
+      spark-mempool-web:
+        condition: service_started
+
+  spark-funder:
+    <<: *spark-tools
+    command: [/scripts/funder.sh]
+    restart: unless-stopped
+    environment:
+      <<: *spark-tools-env
+      LEAVES_PER_DENOMINATION: '8'
+      MAX_DENOMINATION_POWER: '16'
+    healthcheck:
+      test: [CMD, test, -f, /local/ready]
+      interval: 5s
+      start_period: 30m
+    depends_on:
+      spark-sspd:
+        condition: service_started
+
+  # Reports progress until a wallet can be served, then where everything is. `./spark up` follows its log.
+  spark-ready:
+    <<: *spark-tools
+    command: [/scripts/ready.sh]
+    environment:
+      <<: *spark-tools-env
+      SPARK_CONFIG_PATH: spark-regtest/data/spark-config.json
+      OPERATOR_URLS: http://spark-operator-proxy:8535 http://spark-operator-proxy:8536 http://spark-operator-proxy:8537
+      PUBLIC_HOST: ${SPARK_PUBLIC_HOST:-127.0.0.1}
+      OPERATOR_PUBLIC_PORTS: 23535 23536 23537
+      MEMPOOL_PORT: '23090'
+      SSP_PORT: '23049'
+      LNURL_PORT: '23083'
+      DATA_SYNC_PORT: '23081'
+      LEAVES_PER_DENOMINATION: '8'
+      MAX_DENOMINATION_POWER: '16'
+      DKG_MIN_AVAILABLE_KEYS: ${SPARK_DKG_MIN_AVAILABLE_KEYS:-12000}
+      READY_TIMEOUT_SECONDS: '2400'
+      POSTGRES_HOST: spark-postgres
+      POSTGRES_PORT: '5432'
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    depends_on:
+      spark-postgres:
+        condition: service_healthy
+
+volumes:
+  spark_local:
+  spark_data_sync:
+  spark_ldk_data:
+  spark_ldk_alice_data:
+  spark_bitcoind:
+  spark_postgres:
+  spark_electrs:

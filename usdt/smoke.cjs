@@ -71,7 +71,11 @@ async function smoke() {
     const secondExecuted = await settled(second.transfer.id);
     assert.equal(BigInt(await rpc(urls.control, 'balance', [recipient])), 750000n);
 
-    await rpc(urls.control, 'mine', [3]);
+    // Cross Anvil's 128-state retention window before reading old receipts/logs and proofs.
+    // Bound both RPC hops to small batches on slower hosts.
+    for (let mined = 0; mined < 256; mined += 16) {
+      await rpc(urls.control, 'mine', [16]);
+    }
     const received = await history(directory, 'recipient');
     assert.equal(received.length, 2);
     for (const [payment, amount] of [
