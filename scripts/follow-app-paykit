@@ -56,6 +56,21 @@ built_rev() {
 }
 api() { curl -fsS -H 'Accept: application/vnd.github+json' "https://api.github.com/$1"; }
 
+# The Cargo.lock a build of Paykit Server $1 uses: upstream's, with the Cargo.lock part of each patch scoped to that revision
+# (`Applies-to:`), as `pubky-marketplace build-paykit` applies it.
+server_lock() {
+  local dir patch
+  dir=$(mktemp -d)
+  curl -fsS "https://raw.githubusercontent.com/pubky/paykit-server/$1/Cargo.lock" > "$dir/Cargo.lock" || { rm -rf "$dir"; return 1; }
+  for patch in "$PWD"/marketplace/patches/paykit-server-*.patch; do
+    [ -e "$patch" ] || continue
+    [ "$(sed -n 's/^Applies-to: \([0-9a-f]\{40\}\).*/\1/p' "$patch")" = "$1" ] || continue
+    (cd "$dir" && git apply --include=Cargo.lock "$patch") || { rm -rf "$dir"; return 1; }
+  done
+  cat "$dir/Cargo.lock"
+  rm -rf "$dir"
+}
+
 no_buildkit_dockerfile() {
   # The QA boxes' Docker has no BuildKit: drop the cache mounts, keep everything else.
   sed -E -e 's/^RUN --mount=[^ ]+ \\/RUN \\/' -e '/^[[:space:]]+--mount=/d' "$1" > "$2"
@@ -132,7 +147,7 @@ else
       from="pubky/paykit-server master"
     fi
   fi
-  lock=$(curl -fsS "https://raw.githubusercontent.com/pubky/paykit-server/$server/Cargo.lock")
+  lock=$(server_lock "$server")
   if ! alignment=$(printf '%s' "$lock" | python3 scripts/paykit-lock.py --lock - --paykit-rev "$rev" --cache .marketplace/provenance); then
     echo "paykit-server: $from (${server:0:7}) does not lock paykit-rs v$version; no Paykit Server revision to build" >&2
     exit 4
@@ -156,7 +171,7 @@ fi
 # Later commands retain only the verified public pins, never an auth token.
 if [ "$check" != --check ]; then
   [ -n "${server:-}" ] || server=$(docker image inspect --format '{{ index .Config.Labels "tech.masivo.paykit-server" }}' "$server_image")
-  lock=$(curl -fsS "https://raw.githubusercontent.com/pubky/paykit-server/$server/Cargo.lock")
+  lock=$(server_lock "$server")
   alignment=$(printf '%s' "$lock" | python3 scripts/paykit-lock.py --lock - --paykit-rev "$rev" --cache .marketplace/provenance)
   mkdir -p .marketplace/provenance
   printf '%s\n' "$alignment" > .marketplace/provenance/server-alignment.json
