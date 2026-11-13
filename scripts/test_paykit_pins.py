@@ -58,11 +58,11 @@ class SavedFixturePinsTests(unittest.TestCase):
         compose = (ROOT / 'docker-compose.yml').read_text()
         for service in ('homeserver-proxy','fixture-issuer','rc56-peer'):
             block = re.search(r'^  '+service+r':\n(.*?)(?=^  [\w-]+:|\Z)', compose, re.M|re.S)[1]
-            self.assertIn('image: bitkit-docker/payment-request-fixture:${PAYKIT_FIXTURE_TAG:-rc65-shared}', block)
-            self.assertIn('PAYKIT_RS_REV: ${PAYKIT_RS_REV:-7185ae7da9315028e5331442d71d739c27f1442c}', block)
+            self.assertIn('image: bitkit-docker/payment-request-fixture:${PAYKIT_FIXTURE_TAG:-rc8-shared}', block)
+            self.assertIn('PAYKIT_RS_REV: ${PAYKIT_RS_REV:-adbe24aca6b326d28312abb7e73e8aa6a0392882}', block)
 
     def test_later_commands_retain_verified_stable_and_prerelease_pins(self):
-        for tag, image_tag in [('v0.1.0', '0.1.0-shared'), ('v0.1.0-rc65', 'rc65-shared')]:
+        for tag, image_tag in [('v0.1.0', '0.1.0-shared'), ('v0.1.0-rc65', 'rc65-shared'), ('v0.1.1-rc8', 'rc8-shared')]:
             with self.subTest(tag=tag):
                 self.pins['paykitTag'] = tag
                 result = self.command()

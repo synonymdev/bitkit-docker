@@ -17,20 +17,21 @@ if [ -f .marketplace/paykit-pins.json ]; then
   LOCKS_TAG=${LOCKS_TAG:-$saved_locks_tag}
 fi
 
-# Pinned upstream revisions. Paykit Server is pubky/paykit-server#46 (head 0ffd4da, paykit-rs v0.1.0-rc65, the version both apps pin; not merged
-# or released yet, the latest release is rc8): move PAYKIT_SERVER_REV to its merge or release once #46 lands. Its setup flow emits the Pubky
+# Pinned upstream revisions. Paykit Server is pubky/paykit-server#131 (head b441977, paykit-rs v0.1.1-rc6, Pubky 0.16.2; not merged) with
+# marketplace/patches/paykit-server-paykit-rs-rc8.patch moving its lock to paykit-rs v0.1.1-rc8, which no upstream revision locks yet: move
+# PAYKIT_SERVER_REV to the first upstream revision on rc8 and drop that patch. Its setup flow emits the Pubky
 # grant auth URL (pubkyauth://signin_grant with cid and cpk) that the apps' Paykit SDK requires.
 # The Pubky testnet is pinned in marketplace/pubky-testnet/Dockerfile.
-PAYKIT_SERVER_REV=${PAYKIT_SERVER_REV:-0ffd4da2adaab048939e0ea18ff916a27a7cfb0e}
-PAYKIT_RS_REV=${PAYKIT_RS_REV:-7185ae7da9315028e5331442d71d739c27f1442c}   # v0.1.0-rc65, paykit-server's paykit-lib and paykit-sdk pin
-PAYKIT_RS_TAG=${PAYKIT_RS_TAG:-v0.1.0-rc65}
-LOCKS_REV=${LOCKS_REV:-b3dc87c961f6b907d76cde9c4a28f00670d5231e}       # v0.1.0-rc8, paykit-server's locks-core pin
-LOCKS_TAG=${LOCKS_TAG:-v0.1.0-rc8}
+PAYKIT_SERVER_REV=${PAYKIT_SERVER_REV:-b4419772dde23292189764e48a3ba4651b67a50d}
+PAYKIT_RS_REV=${PAYKIT_RS_REV:-adbe24aca6b326d28312abb7e73e8aa6a0392882}   # v0.1.1-rc8, paykit-server's paykit-lib and paykit-sdk pin
+PAYKIT_RS_TAG=${PAYKIT_RS_TAG:-v0.1.1-rc8}
+LOCKS_REV=${LOCKS_REV:-3013d8c181a2cf7a44c216e9e2440445be87b3d5}       # v0.1.1-rc2, paykit-server's locks-core pin
+LOCKS_TAG=${LOCKS_TAG:-v0.1.1-rc2}
 
 SOURCES=.marketplace/sources
 # Compose reads these for the Paykit Server and driver image tags and labels.
 export PAYKIT_SERVER_REV PAYKIT_RS_REV PAYKIT_SERVER_TAG="${PAYKIT_SERVER_REV:0:7}"
-# The driver's `paykit-key-authorization` comes from the payment request fixture built on the same paykit-rs (v0.1.0-rc65 -> rc65-shared).
+# The driver's `paykit-key-authorization` comes from the payment request fixture built on the same paykit-rs (v0.1.1-rc8 -> rc8-shared).
 paykit_version="${PAYKIT_RS_TAG#v}"
 export PAYKIT_FIXTURE_TAG="${paykit_version##*-}-shared"
 FIXTURE_IMAGE=bitkit-docker/payment-request-fixture:$PAYKIT_FIXTURE_TAG
@@ -47,7 +48,7 @@ PEER_SERVICES=(fixture-issuer rc56-peer)
 
 show_help() {
   cat <<EOF
-Pubky marketplace fixture: Pubky testnet, Paykit Server 0ffd4da (paykit-rs rc65), regtest chain and a purchase driver.
+Pubky marketplace fixture: Pubky testnet, Paykit Server b441977 (paykit-rs rc8), regtest chain and a purchase driver.
 Usage: ${CLI_NAME} <command> [options]
 Stack:
     build                              Fetch the pinned sources and build the images
@@ -196,12 +197,18 @@ check_lock_pins() {
 }
 
 # Fixes the fixture carries on top of the pinned Paykit Server tree until upstream has them (marketplace/patches, named in the
-# image label tech.masivo.paykit-server-patches). Each applies once; a patch whose `Upstream:` commit the pinned tree already contains
-# is skipped; a patch that neither applies nor is applied otherwise stops the build.
+# image label tech.masivo.paykit-server-patches). Each applies once; a patch with an `Applies-to:` commit is skipped on any other
+# PAYKIT_SERVER_REV; a patch whose `Upstream:` commit the pinned tree already contains is skipped; a patch that neither applies nor
+# is applied otherwise stops the build.
 apply_paykit_server_patches() {
-  local patch upstream
+  local patch upstream applies_to
   for patch in marketplace/patches/paykit-server-*.patch; do
     [ -e "$patch" ] || continue
+    applies_to=$(sed -n 's/^Applies-to: \([0-9a-f]\{40\}\).*/\1/p' "$patch")
+    if [ -n "$applies_to" ] && [ "$applies_to" != "$PAYKIT_SERVER_REV" ]; then
+      echo "skipped $(basename "$patch"): it applies only to paykit-server ${applies_to:0:8}"
+      continue
+    fi
     upstream=$(sed -n 's/^Upstream: \([0-9a-f]\{40\}\).*/\1/p' "$patch")
     if git -C "$SOURCES/paykit-server" apply --check "$PWD/$patch" 2>/dev/null; then
       git -C "$SOURCES/paykit-server" apply "$PWD/$patch"

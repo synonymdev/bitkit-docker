@@ -61,7 +61,7 @@ payment controls, proof verification, the optional Shop overlay and simulation l
 - **VSS Server**: Versioned Storage Server for app and ldk-node state backups
 - **Homegate**: Pubky Homeserver signup gatekeeper with local admin API mock
 - **Pubky marketplace fixture** (opt-in `marketplace` profile): Pubky testnet, Paykit Server and a purchase driver for the marketplace wallet journey
-- **Payment Request fixture** (opt-in `payment-requests` profile): rc65 issuer and controlled peer on the marketplace Pubky testnet
+- **Payment Request fixture** (opt-in `payment-requests` profile): rc8 issuer and controlled peer on the marketplace Pubky testnet
 - **Pubky Swaps provider** (opt-in `pubky-swaps` profile): the swap route's counterparty on this stack's LND and Electrum, for the apps' swap route journeys
 - **Spark regtest** (opt-in `spark` profile, `./spark`): Spark operators, the Spark service provider and mempool.space on this chain, for local Spark development, offline E2E and emergency-exit tests
 
@@ -335,7 +335,7 @@ docker compose logs -f bitcoind
 
 #### Payment Requests and Deadline History
 
-The `payment-requests` profile starts two disposable Paykit rc65 SDK peers (paykit-rs `7185ae7`, Pubky 0.14.0) on
+The `payment-requests` profile starts two disposable Paykit SDK peers (paykit-rs `adbe24a`, v0.1.1-rc8, Pubky 0.16.2) on
 the marketplace fixture's Pubky testnet. `fixture-issuer` publishes a regtest
 Paykit endpoint and sends one-time requests. `rc56-peer` can accept, reject,
 cancel and pay requests through the shared regtest Bitcoin node. Plain
@@ -427,7 +427,7 @@ Pubky testnet's network namespace, so `./pubky-marketplace down` and `reset`
 remove them together with the testnet. After `reset`, start them again with the
 `up -d --no-build fixture-issuer rc56-peer` command above, wait for `/health`,
 rerun `payment-requests/prepare` and relink the app. `./pubky-marketplace seed`
-needs outbound internet for Paykit Server setup; the rc65 peer calls use the
+needs outbound internet for Paykit Server setup; the peer calls use the
 local testnet. The lane still needs a Bitkit build pointed at the local Pubky
 testnet and to verify the requested rows on device. The headless preparation
 command does not populate a separate Bitkit identity's history; accepted and
@@ -462,9 +462,9 @@ attempt resolves it. Without `peer_pubky`, only the public endpoint changes.
 #### Following the apps' Paykit pin
 
 The Paykit fixtures must run the paykit-rs version the app under test pins: the payment request peers
-(`payment-request-fixture:rc65-shared`, paykit-rs `7185ae7`, v0.1.0-rc65) and Paykit Server (built from
-the head of [pubky/paykit-server#46](https://github.com/pubky/paykit-server/pull/46), `0ffd4da`, until it
-merges or is released). Each image records the paykit-rs commit it was built from (label
+(`payment-request-fixture:rc8-shared`, paykit-rs `adbe24a`, v0.1.1-rc8) and Paykit Server (built from
+the head of [pubky/paykit-server#131](https://github.com/pubky/paykit-server/pull/131), `b441977`, with
+`marketplace/patches/paykit-server-paykit-rs-rc8.patch` moving its lock from rc6 to rc8 until an upstream revision locks rc8). Each image records the paykit-rs commit it was built from (label
 `tech.masivo.paykit-rs`, or `/usr/local/share/paykit-rs-rev` in the peers' image).
 
 ```bash
@@ -488,7 +488,7 @@ Checksummed public packages and source archives are cached under
 After a successful alignment, `.marketplace/paykit-pins.json` retains the verified
 public revisions for later `pubky-marketplace` commands. Explicit environment
 overrides still take precedence. Stable releases use tags such as `0.1.0-shared`;
-prereleases keep tags such as `rc65-shared`. The classic Docker builder supports
+prereleases keep tags such as `rc8-shared`. The classic Docker builder supports
 both the older Locks source context and current registry-release Dockerfiles;
 unknown build layouts still fail before a build.
 
@@ -895,7 +895,7 @@ Both URLs are `pubkyauth://signin_grant?...` links whose one-time secret must st
 
 The fixture cannot check a Bitkit seller's payout address against the wallet's xpub, because Paykit Server keeps the xpub and the derived address to itself. It checks that the Payment Request address is a regtest native SegWit address, that exactly the amount is paid to it on chain, and Paykit Server's signed status (`detected`, then `confirmed` with a matching amount). That the address belongs to the wallet shows in the seller app: its balance rises by the amount and the received activity carries the same txid as `status`. `./pubky-marketplace verify-bitkit-seller` runs the whole path with a headless stand-in for the wallet and does check the payout against the stand-in's xpub.
 
-To run the route on Paykit Server v0.1.0-rc11 (`662dca06`, paykit-rs rc72, locks rc9) instead of the default `0ffd4da`, export its pins and keep them exported for every `./pubky-marketplace` command of that run: a command run with other pins checks the sources out at those pins again. Its images are tagged `662dca0` (the driver's key authorization helper comes from `payment-request-fixture:rc72-shared`, built when missing), so the default images stay as they are.
+To run the route on Paykit Server v0.1.0-rc11 (`662dca06`, paykit-rs rc72, locks rc9) instead of the default `b441977`, export its pins and keep them exported for every `./pubky-marketplace` command of that run: a command run with other pins checks the sources out at those pins again. Its images are tagged `662dca0` (the driver's key authorization helper comes from `payment-request-fixture:rc72-shared`, built when missing), so the default images stay as they are.
 
 ```bash
 export PAYKIT_SERVER_REV=662dca0619a9aa2962bcd677bd5ddd4563cd2784 \
