@@ -744,6 +744,16 @@ curl -s 127.0.0.1:23012/health | jq -r .pubky                           # the on
 
 - **Provider.** It shares LND's network namespace, so it dials LND's gRPC on `127.0.0.1:10009` with the TLS cert and admin macaroon LND wrote to `./lnd`, and it waits for the macaroon on a fresh stack. It offers swaps of 10,000 to 1,000,000 sats (base fee 100 sats, 2,500 ppm, one confirmation) and runs with `--no-homeserver`, so a wallet finds it only among its contacts. Wallets reach it over iroh by its pubky, which needs outbound internet. Its throwaway Pubky identity is made on first start and kept in the `pubky_swap_data` volume, so the pubky survives restarts; remove the volume for a new one. Its claims and refunds go through LND's on-chain wallet, funded above.
 - **Wallet.** Build the app with the marketplace fixture's homeserver (see [Pubky Marketplace Journey](#pubky-marketplace-journey)) and the swap route on (`PUBKY_SWAPS_ROUTES=true` on Android). Create a new wallet, open a 500,000-sat channel from `curl -H 'Host: 127.0.0.1:23010' 127.0.0.1:23010/generate/channel` (start the `lnurl-pay` fixture with `docker compose --profile lnurl-pay up -d --build --wait lnurl-server-fixture`), leave Savings empty, create a Pubky profile, and save the provider's and the `fixture-issuer`'s pubkys as contacts.
+- **Issuer contact.** J1 pays the `fixture-issuer` as a saved contact, which needs the issuer linked to the wallet and holding the wallet's private payment list. After saving the contact, link the issuer to the wallet and sync until it reports the link, then send the wallet its payment list:
+
+  ```bash
+  TO_APP=$(jq -nc --arg pubky "$APP_PUBKY" '{peer_pubky:$pubky,peer_path:"bitkit/wallet"}')
+  curl -fsS -X POST http://127.0.0.1:23012/link -H 'content-type: application/json' -d "$TO_APP" | jq
+  curl -fsS -X POST http://127.0.0.1:23012/sync -H 'content-type: application/json' -d "$TO_APP" | jq   # repeat while the app advances its handshake
+  curl -fsS -X POST http://127.0.0.1:23012/endpoints -H 'content-type: application/json' -d "$(jq -c '. + {action:"restore"}' <<<"$TO_APP")" | jq   # private_payment_list.sent is 1
+  ```
+
+  Without the payment list, tapping the contact shows that it hasn't enabled payments.
 - **Android emulator.** Run `adb reverse tcp:<port> tcp:<port>` for 6286, 6287, 6288, 15411, 15412, 60001, 23735, 23000 and 23010 before the first launch.
 - **iOS simulator.** The `127.0.0.1` URLs work as they are.
 - **Mining.** The provider's lockup confirms with `./bitcoin-cli mine 1`; the wallet's claim needs one more block.
