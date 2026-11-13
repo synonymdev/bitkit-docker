@@ -62,6 +62,7 @@ payment controls, proof verification, the optional Shop overlay and simulation l
 - **Homegate**: Pubky Homeserver signup gatekeeper with local admin API mock
 - **Pubky marketplace fixture** (opt-in `marketplace` profile): Pubky testnet, Paykit Server and a purchase driver for the marketplace wallet journey
 - **Payment Request fixture** (opt-in `payment-requests` profile): rc65 issuer and controlled peer on the marketplace Pubky testnet
+- **Pubky Swaps provider** (opt-in `pubky-swaps` profile): the swap route's counterparty on this stack's LND and Electrum, for the apps' swap route journeys
 - **Spark regtest** (opt-in `spark` profile, `./spark`): Spark operators, the Spark service provider and mempool.space on this chain, for local Spark development, offline E2E and emergency-exit tests
 
 ## Quick Start
