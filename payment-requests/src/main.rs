@@ -1,4 +1,4 @@
-//! Disposable rc65 Paykit peer for Bitkit regtest journeys.
+//! Disposable Paykit peer (paykit-rs v0.1.1-rc8) for Bitkit regtest journeys.
 //! Two Compose services run this binary with separate identities and receiver paths.
 #![recursion_limit = "512"]
 
@@ -711,7 +711,7 @@ async fn endpoints(State(app): State<Arc<App>>, Json(input): Json<EndpointsInput
 }
 
 /// `paykit-key-authorization` (this binary under that name, in the marketplace driver's image): publishes the Paykit noise key
-/// authorization of an identity the driver signed up, as a Bitkit wallet does in its own Paykit setup. Paykit Server rc65 checks it
+/// authorization of an identity the driver signed up, as a Bitkit wallet does in its own Paykit setup. Paykit Server checks it
 /// before it accepts a setup claim. Reads `{"version":1,"creator_secret":"<base64url 32 bytes>"}` on stdin.
 async fn publish_key_authorization() -> Result<()> {
     use base64::Engine;
