@@ -1,0 +1,8 @@
+[package]
+name = "pubky-swap-keygen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+bip39 = { version = "2.2", features = ["rand"] }
