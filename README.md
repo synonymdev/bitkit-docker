@@ -729,7 +729,7 @@ The `spark` profile runs a Spark network of your own on this chain: three Spark 
 
 #### Pubky Swaps
 
-The `pubky-swaps` profile runs a Pubky Swaps provider (`coreyphillips/pubky-swap` at `f45e204`, the commit bitkit-core's Pubky Swaps client pins) on this stack's LND and Electrum. It is the counterparty of the apps' swap route: a Spending-only wallet pays a contact's on-chain address by paying the provider's hold invoice over Lightning, and the provider pays the address on chain. The apps' journeys `paykit-swap-route.xml` (J1) and `paykit-swap-restore.xml` (J2) in [bitkit-ios](https://github.com/synonymdev/bitkit-ios/tree/master/journeys) and [bitkit-android](https://github.com/synonymdev/bitkit-android/tree/master/journeys) use it with the `marketplace` and `payment-requests` fixtures.
+The `pubky-swaps` profile runs a Pubky Swaps provider (`coreyphillips/pubky-swap` at `f45e204`, the commit bitkit-core's Pubky Swaps client pins) on this stack's LND and Electrum. It is the counterparty of the apps' swap route: a Spending-only wallet pays a contact's on-chain address by paying the provider's hold invoice over Lightning, and the provider pays the address on chain. The apps' journeys `paykit-swap-route.xml` (J1) and `paykit-swap-restore.xml` (J2) use it with the `marketplace` and `payment-requests` fixtures. They land in each app's `journeys/` with the swap route ([synonymdev/bitkit-ios#1170](https://github.com/synonymdev/bitkit-ios/pull/1170), [synonymdev/bitkit-android#1732](https://github.com/synonymdev/bitkit-android/pull/1732)).
 
 ```bash
 docker compose up -d                                                    # chain, Electrum, LND, LNURL server

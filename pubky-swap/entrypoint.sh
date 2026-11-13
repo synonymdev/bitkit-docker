@@ -13,6 +13,11 @@ until [ -s "$macaroon" ]; do
   echo "waiting for LND's macaroon"
   sleep 2
 done
+# the provider connects to Electrum once at startup, and runs without its chain watcher if Electrum is not up yet
+until bash -c 'exec 3<>/dev/tcp/electrs/60001' 2>/dev/null; do
+  echo "waiting for Electrum"
+  sleep 2
+done
 exec swap-provider \
   --network regtest \
   --directions submarine,reverse \
