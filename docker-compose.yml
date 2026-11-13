@@ -646,6 +646,26 @@ services:
       FIXTURE_PORT: 3013
       BITCOIN_RPC_URL: http://bitcoind:43782
 
+  # Pubky Swaps provider (profile "pubky-swaps"), the swap route's counterparty in the apps' J1 and J2 journeys: it takes a
+  # wallet's hold invoice on LND and pays the contact's address on chain. It shares LND's network namespace, so it dials LND's
+  # gRPC on 127.0.0.1 with the TLS cert LND wrote; the apps reach it over iroh by its pubky, which it logs on start. Its
+  # throwaway identity is made on first start and kept in the pubky_swap_data volume. See README "Pubky Swaps".
+  pubky-swap:
+    profiles: [pubky-swaps]
+    image: bitkit-docker/pubky-swap:${PUBKY_SWAP_TAG:-f45e204}
+    build:
+      context: ./pubky-swap
+      args:
+        PUBKY_SWAP_REV: ${PUBKY_SWAP_REV:-f45e204ee7646dc91983d90e4782d40760b6c72b}
+    restart: unless-stopped
+    network_mode: service:lnd
+    depends_on:
+      - lnd
+      - electrs
+    volumes:
+      - './lnd:/lnd:ro'
+      - 'pubky_swap_data:/data'
+
   # ---------------------------------------------------------------------------
   # Shop on staging with our own Paykit Server (profile "shop-mixed"). Paykit Server v0.1.0-rc11 (662dca06, paykit-rs ad3c7224 =
   # v0.1.0-rc72, the version the Bitkit send-fix builds pin) resolves Pubky on mainnet, so it serves Synonym's staging homeserver,
@@ -1023,6 +1043,7 @@ volumes:
   shop_mixed_postgres_data:
   shop_mixed_state:
   shop_order_postgres_data:
+  pubky_swap_data:
 
 secrets:
   usdt_upstream:

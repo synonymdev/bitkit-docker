@@ -62,6 +62,7 @@ payment controls, proof verification, the optional Shop overlay and simulation l
 - **Homegate**: Pubky Homeserver signup gatekeeper with local admin API mock
 - **Pubky marketplace fixture** (opt-in `marketplace` profile): Pubky testnet, Paykit Server and a purchase driver for the marketplace wallet journey
 - **Payment Request fixture** (opt-in `payment-requests` profile): rc8 issuer and controlled peer on the marketplace Pubky testnet
+- **Pubky Swaps provider** (opt-in `pubky-swaps` profile): the swap route's counterparty on this stack's LND and Electrum, for the apps' swap route journeys
 - **Spark regtest** (opt-in `spark` profile, `./spark`): Spark operators, the Spark service provider and mempool.space on this chain, for local Spark development, offline E2E and emergency-exit tests
 
 ## Quick Start
@@ -725,6 +726,38 @@ The `spark` profile runs a Spark network of your own on this chain: three Spark 
   3. Start the emergency exit, and `./spark send` the fee funding it asks for.
   4. Run `./spark mine` once per package, until the app waits for the timelock.
   5. Run `./spark mature`, then `./spark mine` for the refunds and the sweep to Savings.
+
+#### Pubky Swaps
+
+The `pubky-swaps` profile runs a Pubky Swaps provider (`coreyphillips/pubky-swap` at `f45e204`, the commit bitkit-core's Pubky Swaps client pins) on this stack's LND and Electrum. It is the counterparty of the apps' swap route: a Spending-only wallet pays a contact's on-chain address by paying the provider's hold invoice over Lightning, and the provider pays the address on chain. The apps' journeys `paykit-swap-route.xml` (J1) and `paykit-swap-restore.xml` (J2) use it with the `marketplace` and `payment-requests` fixtures. They land in each app's `journeys/` with the swap route ([synonymdev/bitkit-ios#1170](https://github.com/synonymdev/bitkit-ios/pull/1170), [synonymdev/bitkit-android#1732](https://github.com/synonymdev/bitkit-android/pull/1732)).
+
+```bash
+docker compose up -d                                                    # chain, Electrum, LND, LNURL server
+./bitcoin-cli fund                                                      # mature coins for the chain's wallet
+./bitcoin-cli send 1 "$(docker compose exec -T lnd lncli --lnddir /home/lnd/.lnd --network regtest newaddress p2wkh | jq -r .address)" -m 6
+docker compose --profile pubky-swaps up -d --build pubky-swap          # first build takes a while
+docker compose logs pubky-swap | grep "Provider pubky"                 # the provider's pubky: save it as a contact in the wallet
+./pubky-marketplace up && ./pubky-marketplace seed                      # Pubky testnet and homeserver the apps sign up on
+docker compose --profile marketplace --profile payment-requests up -d --no-build fixture-issuer rc56-peer
+curl -s 127.0.0.1:23012/health | jq -r .pubky                           # the on-chain-only contact J1 pays
+```
+
+- **Provider.** It shares LND's network namespace, so it dials LND's gRPC on `127.0.0.1:10009` with the TLS cert and admin macaroon LND wrote to `./lnd`, and it waits for the macaroon on a fresh stack. It offers swaps of 10,000 to 1,000,000 sats (base fee 100 sats, 2,500 ppm, one confirmation) and runs with `--no-homeserver`, so a wallet finds it only among its contacts. Wallets reach it over iroh by its pubky, which needs outbound internet. Its throwaway Pubky identity is made on first start and kept in the `pubky_swap_data` volume, so the pubky survives restarts; remove the volume for a new one. Its claims and refunds go through LND's on-chain wallet, funded above.
+- **Wallet.** Build the app with the marketplace fixture's homeserver (see [Pubky Marketplace Journey](#pubky-marketplace-journey)) and the swap route on (`PUBKY_SWAPS_ROUTES=true` on Android). Create a new wallet, open a 500,000-sat channel from `curl -H 'Host: 127.0.0.1:23010' 127.0.0.1:23010/generate/channel` (start the `lnurl-pay` fixture with `docker compose --profile lnurl-pay up -d --build --wait lnurl-server-fixture`), leave Savings empty, create a Pubky profile, and save the provider's and the `fixture-issuer`'s pubkys as contacts.
+- **Issuer contact.** J1 pays the `fixture-issuer` as a saved contact, which needs the issuer linked to the wallet and holding the wallet's private payment list. After saving the contact, link the issuer to the wallet and sync until it reports the link, then send the wallet its payment list:
+
+  ```bash
+  TO_APP=$(jq -nc --arg pubky "$APP_PUBKY" '{peer_pubky:$pubky,peer_path:"bitkit/wallet"}')
+  curl -fsS -X POST http://127.0.0.1:23012/link -H 'content-type: application/json' -d "$TO_APP" | jq
+  curl -fsS -X POST http://127.0.0.1:23012/sync -H 'content-type: application/json' -d "$TO_APP" | jq   # repeat while the app advances its handshake
+  curl -fsS -X POST http://127.0.0.1:23012/endpoints -H 'content-type: application/json' -d "$(jq -c '. + {action:"restore"}' <<<"$TO_APP")" | jq   # private_payment_list.sent is 1
+  ```
+
+  Without the payment list, tapping the contact shows that it hasn't enabled payments.
+- **Android emulator.** Run `adb reverse tcp:<port> tcp:<port>` for 6286, 6287, 6288, 15411, 15412, 60001, 23735, 23000 and 23010 before the first launch.
+- **iOS simulator.** The `127.0.0.1` URLs work as they are.
+- **Mining.** The provider's lockup confirms with `./bitcoin-cli mine 1`; the wallet's claim needs one more block.
+- **Logs.** `docker compose logs -f pubky-swap` shows `hold invoice accepted`, `HTLC funded; awaiting client claim` and `client claimed; hold invoice settled` for a swap that completes.
 
 #### Pubky Marketplace Journey
 
