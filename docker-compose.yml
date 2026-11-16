@@ -429,8 +429,6 @@ services:
     environment:
       - MACOS=1
       - REGTEST_RPC_URL=http://host.docker.internal:43782
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - ./.trezor-user-env/trezor-suite:/trezor-user-env/trezor-suite
       - ./.trezor-user-env/logs/screens:/trezor-user-env/logs/screens
