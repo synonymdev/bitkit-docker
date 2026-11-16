@@ -48,13 +48,16 @@ services:
     volumes:
       - 'bitcoin_home:/home/bitcoin/.bitcoin'
     user: bitcoin
-    # generate one block so electrs stop complaining
+    # Seed a fresh regtest wallet with mature coinbase funds.
     entrypoint:
-      [
-        'bash',
-        '-c',
-        'sleep 1; while ! bitcoin-cli -rpcconnect=bitcoind -generate 1; do sleep 1; done',
-      ]
+      - bash
+      - -ec
+      - |
+        cli=(bitcoin-cli -regtest -rpcconnect=bitcoind -rpcport=43782 -rpcuser=polaruser -rpcpassword=polarpass -rpcwait -rpcwaittimeout=60)
+        balance=$$("$${cli[@]}" getbalance)
+        if ! awk -v balance="$$balance" 'BEGIN { exit !(balance > 0) }'; then
+          "$${cli[@]}" -generate 101
+        fi
 
   electrs:
     container_name: electrum
@@ -426,6 +429,8 @@ services:
     environment:
       - MACOS=1
       - REGTEST_RPC_URL=http://host.docker.internal:43782
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./.trezor-user-env/trezor-suite:/trezor-user-env/trezor-suite
       - ./.trezor-user-env/logs/screens:/trezor-user-env/logs/screens

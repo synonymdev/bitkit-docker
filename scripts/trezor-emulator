@@ -15,7 +15,11 @@ Usage: ./scripts/trezor-emulator <command>
 
 Commands:
   start       Start Trezor User Env, Bridge, and a deterministic T2T1 emulator
+  start --json    Start and print the E2E fixture as JSON
   status      Show User Env bridge/emulator status and Bridge enumerate output
+  status --json   Print the current E2E fixture as JSON
+  get-address     Print the current fixture receive address
+  pull            Pull the selected User Env service image
   adb         Reverse the Bridge port for a physical Android device
   stop        Stop the emulator and Bridge; stop the repo-managed User Env service
   logs        Tail the User Env container logs
@@ -26,6 +30,9 @@ Useful environment overrides:
   TREZOR_MODEL=T2T1
   TREZOR_FIRMWARE=2-main
   TREZOR_BRIDGE_VERSION=node-bridge
+  TREZOR_RANDOM_MNEMONIC=false
+  TREZOR_ADDRESS_COIN=Regtest
+  TREZOR_ADDRESS_PATH="m/84h/1h/0h/0/0"
   TREZOR_LABEL="Bitkit Test Trezor"
   TREZOR_WIPE=false
 EOF
@@ -105,6 +112,8 @@ controller() {
     -e TREZOR_MNEMONIC="${TREZOR_MNEMONIC:-all all all all all all all all all all all all}" \
     -e TREZOR_PIN="${TREZOR_PIN:-}" \
     -e TREZOR_PASSPHRASE_PROTECTION="${TREZOR_PASSPHRASE_PROTECTION:-false}" \
+    -e TREZOR_ADDRESS_COIN="${TREZOR_ADDRESS_COIN:-Regtest}" \
+    -e TREZOR_ADDRESS_PATH="${TREZOR_ADDRESS_PATH:-m/84h/1h/0h/0/0}" \
     -e TREZOR_LABEL="${TREZOR_LABEL:-Bitkit Test Trezor}" \
     -e TREZOR_NEEDS_BACKUP="${TREZOR_NEEDS_BACKUP:-false}" \
     -e TREZOR_WIPE="${TREZOR_WIPE:-true}" \
@@ -216,9 +225,59 @@ Bitkit app quick checks:
 EOF
 }
 
+print_json_summary() {
+  local mnemonic="$1"
+  local address="$2"
+  local address_path="${TREZOR_ADDRESS_PATH:-m/84h/1h/0h/0/0}"
+
+  MNEMONIC="$mnemonic" \
+    ADDRESS="$address" \
+    ADDRESS_COIN="${TREZOR_ADDRESS_COIN:-Regtest}" \
+    ADDRESS_PATH="$address_path" \
+    DASHBOARD_URL="$DASHBOARD_URL" \
+    BRIDGE_URL="$BRIDGE_URL" \
+    python3 - <<'PY'
+import json
+import os
+
+print(json.dumps({
+    "dashboardUrl": os.environ["DASHBOARD_URL"],
+    "bridgeUrl": os.environ["BRIDGE_URL"],
+    "mnemonic": os.environ["MNEMONIC"] or None,
+    "address": {
+        "coin": os.environ["ADDRESS_COIN"],
+        "path": os.environ["ADDRESS_PATH"],
+        "value": os.environ["ADDRESS"],
+    },
+}, sort_keys=True))
+PY
+}
+
+resolve_mnemonic() {
+  if [[ -n "${TREZOR_MNEMONIC:-}" ]]; then
+    printf '%s\n' "$TREZOR_MNEMONIC"
+  elif [[ "${TREZOR_RANDOM_MNEMONIC:-false}" == true ]]; then
+    docker exec "$TREZOR_CONTAINER" "${TREZOR_CONTAINER_PYTHON:-/trezor-user-env/.venv/bin/python3}" \
+      -c 'from mnemonic import Mnemonic; print(Mnemonic("english").generate(strength=128))'
+  else
+    printf '%s\n' 'all all all all all all all all all all all all'
+  fi
+}
+
 start() {
+  local mnemonic address
+  if [[ "${1:-}" == --json ]]; then
+    start_env >&2
+    mnemonic="$(resolve_mnemonic)"
+    TREZOR_MNEMONIC="$mnemonic" controller setup >&2
+    address="$(controller get-address)"
+    print_json_summary "$mnemonic" "$address"
+    return
+  fi
+
   start_env
-  controller setup
+  mnemonic="$(resolve_mnemonic)"
+  TREZOR_MNEMONIC="$mnemonic" controller setup
   echo
   echo "Bridge enumerate:"
   bridge_enumerate
@@ -227,6 +286,14 @@ start() {
 }
 
 status() {
+  if [[ "${1:-}" == --json ]]; then
+    container_running || return 1
+    wait_for_controller >&2
+    local address
+    address="$(controller get-address)"
+    print_json_summary "" "$address"
+    return
+  fi
   wait_for_controller
   controller status
   echo
@@ -273,8 +340,15 @@ main() {
   shift || true
 
   case "$command" in
-    start) start ;;
-    status) status ;;
+    start|status)
+      if [[ $# -gt 1 || ( $# -eq 1 && "$1" != --json ) ]]; then
+        usage >&2
+        exit 1
+      fi
+      "$command" "$@"
+      ;;
+    get-address) controller get-address ;;
+    pull) compose_with_profile pull "$TREZOR_SERVICE" ;;
     adb) adb_reverse ;;
     stop) stop ;;
     logs) logs ;;
