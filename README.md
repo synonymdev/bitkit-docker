@@ -2,6 +2,19 @@
 
 A complete Docker-based development environment for Bitcoin and Lightning Network development, featuring a LNURL server for Lightning payments and testing guides using the Bitkit app.
 
+## Android Appium backend
+
+The base regtest startup mines mature wallet funds when the wallet is empty.
+For the published-port Trezor fixture used by Android E2E on macOS or Linux:
+
+```sh
+TREZOR_SERVICE=trezor-user-env-mac TREZOR_RANDOM_MNEMONIC=true ./scripts/trezor-emulator start --json
+TREZOR_SERVICE=trezor-user-env-mac ./scripts/trezor-emulator status --json
+```
+
+The JSON includes the dashboard and Bridge URLs, the receive address and its derivation path, and
+the generated test mnemonic on start. Run `get-address` to read the fixture address by itself.
+
 ## Local USDT testing
 
 Run the shared Arbitrum fork, Alto and gateway without spending mainnet funds:
