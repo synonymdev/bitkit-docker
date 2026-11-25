@@ -417,6 +417,31 @@ services:
       start_period: 120s
     stop_grace_period: 20s
 
+  # Blockstream Jade firmware under QEMU, seeded and PIN-locked on every start.
+  # Bitkit debug builds reach it over serial-over-TCP with JADE_EMULATOR=true.
+  jade-emulator:
+    profiles: [jade-emulator]
+    image: bitkit-docker/jade-emulator:1.0.41
+    build:
+      context: ./scripts
+      dockerfile: jade-emulator.Dockerfile
+    restart: "no"
+    environment:
+      JADE_MNEMONIC: ${JADE_MNEMONIC-all all all all all all all all all all all all}
+      JADE_NETWORK: ${JADE_NETWORK:-testnet}
+      JADE_WIPE: ${JADE_WIPE:-true}
+    ports:
+      - "127.0.0.1:30121:30121" # serial over TCP used by Bitkit and jadepy
+    volumes:
+      - jade_emulator_state:/var/lib/jade
+    healthcheck:
+      test: ["CMD", "python3", "/opt/bitkit-jade/jade-fixture.py", "--health"]
+      interval: 5s
+      timeout: 10s
+      retries: 6
+      start_period: 180s
+    stop_grace_period: 15s
+
   trezor-user-env-mac:
     image: *trezor_user_env_image
     ports:
@@ -1034,6 +1059,7 @@ services:
 volumes:
   usdt_fork_cache:
   usdt_state:
+  jade_emulator_state:
   trezor_emulator_state:
   trezor_emulator_logs:
   bitcoin_home:

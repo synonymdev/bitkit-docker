@@ -223,6 +223,7 @@ Every host port is 1024 or above. The ports Bitkit, the Pubky SDK or Bitkit's UI
 | Trezor Bridge (both Trezor services) | 21325, 21328 | same |
 | Trezor User Env controller, dashboard, MCP, VNC, noVNC | 9001, 23902, 23903, 23590, 23680 | 9001, 9002, 9003, 5900, 6080 |
 | Trezor emulator fixture controller, dashboard, noVNC (`trezor-emulator`) | 23901, 23902, 23680 | 9001, 9002, 6080 |
+| Jade emulator serial over TCP (`jade-emulator`) | 30121 | 30121 |
 | Pubky testnet DHT, PKARR relay, HTTP relay, homeserver HTTP, Pubky TLS (`marketplace`) | 6881, 15411, 15412, 6286, 6287 | 6881, 15411, 15412, 6286, 6297 (homeserver-proxy) |
 | homeserver-proxy control, homeserver admin (`marketplace`) | 23298, 23288 (`MARKETPLACE_HOMESERVER_ADMIN_PORT`) | 6298, 6288 |
 | Paykit Server (`marketplace`) | 23101 (`MARKETPLACE_PAYKIT_PORT`) | 3001 |
@@ -771,6 +772,29 @@ curl -s 127.0.0.1:23012/health | jq -r .pubky                           # the on
 - **iOS simulator.** The `127.0.0.1` URLs work as they are.
 - **Mining.** The provider's lockup confirms with `./bitcoin-cli mine 1`; the wallet's claim needs one more block.
 - **Logs.** `docker compose logs -f pubky-swap` shows `hold invoice accepted`, `HTLC funded; awaiting client claim` and `client claimed; hold invoice settled` for a swap that completes.
+
+#### Jade Hardware PRs
+
+The optional `jade-emulator` profile runs Blockstream Jade firmware 1.0.41 under QEMU,
+so Bitkit's Jade flows run on an Android emulator or iOS simulator without a device:
+
+```bash
+./scripts/jade-emulator start
+```
+
+Each start wipes the device, loads the `all all ...` seed, sets a PIN through
+Blockstream's pinserver and reboots, so the app finds a Jade locked behind its PIN as
+after power-on. The firmware is a CI build: it enters PIN `012345` and confirms every
+on-device prompt by itself. Unlocking reaches `j8d.io`, so the app needs internet.
+
+Point a debug build at it with `JADE_EMULATOR=true` (Android `local.properties`, or the
+iOS scheme's environment). Android emulators use `10.0.2.2:30121` by default and iOS
+simulators `127.0.0.1:30121`; set `JADE_EMULATOR_URL` otherwise, and run
+`./scripts/jade-emulator adb` for a physical Android device. The Connect Hardware sheet
+then finds a "Jade Emulator".
+
+See [docs/jade-emulator.md](docs/jade-emulator.md) for what it covers and what still
+needs a physical Jade.
 
 #### Pubky Marketplace Journey
 

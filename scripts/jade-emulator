@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
+SERVICE=jade-emulator
+FIXTURE=/opt/bitkit-jade/jade-fixture.py
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/jade-emulator <command>
+
+Commands:
+  start     Build if needed, start a seeded, PIN-locked Jade emulator and wait until it is ready
+  status    Print the device's version info (fails while an app holds the connection)
+  adb       Reverse the emulator port for a physical Android device
+  stop      Stop the emulator
+  logs      Tail the emulator logs
+  help      Show this help
+
+Environment overrides (start):
+  JADE_MNEMONIC="all all ... all"   empty leaves the device uninitialised
+  JADE_NETWORK=testnet              network the PIN is set up for
+  JADE_WIPE=true                    false keeps the last flash, so the wallet survives a restart
+
+Bitkit reaches the emulator on port 30121: 10.0.2.2:30121 from an Android emulator,
+127.0.0.1:30121 from an iOS simulator.
+EOF
+}
+
+compose() {
+  docker compose -f "$COMPOSE_FILE" --profile jade-emulator "$@"
+}
+
+case "${1:-help}" in
+  start)
+    compose up -d --build --wait "$SERVICE"
+    compose exec -T "$SERVICE" python3 "$FIXTURE" status
+    ;;
+  status)
+    compose exec -T "$SERVICE" python3 "$FIXTURE" status
+    ;;
+  adb)
+    adb reverse tcp:30121 tcp:30121
+    ;;
+  stop)
+    compose stop "$SERVICE"
+    ;;
+  logs)
+    compose logs -f --tail 80 "$SERVICE"
+    ;;
+  help | -h | --help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac
