@@ -224,6 +224,7 @@ Every host port is 1024 or above. The ports Bitkit, the Pubky SDK or Bitkit's UI
 | Trezor User Env controller, dashboard, MCP, VNC, noVNC | 9001, 23902, 23903, 23590, 23680 | 9001, 9002, 9003, 5900, 6080 |
 | Trezor emulator fixture controller, dashboard, noVNC (`trezor-emulator`) | 23901, 23902, 23680 | 9001, 9002, 6080 |
 | Jade emulator serial over TCP (`jade-emulator`) | 30121 | 30121 |
+| Jade emulator screen and buttons (`jade-emulator`, interactive mode) | 30122 | 30122 |
 | Pubky testnet DHT, PKARR relay, HTTP relay, homeserver HTTP, Pubky TLS (`marketplace`) | 6881, 15411, 15412, 6286, 6287 | 6881, 15411, 15412, 6286, 6297 (homeserver-proxy) |
 | homeserver-proxy control, homeserver admin (`marketplace`) | 23298, 23288 (`MARKETPLACE_HOMESERVER_ADMIN_PORT`) | 6298, 6288 |
 | Paykit Server (`marketplace`) | 23101 (`MARKETPLACE_PAYKIT_PORT`) | 3001 |
@@ -793,8 +794,10 @@ simulators `127.0.0.1:30121`; set `JADE_EMULATOR_URL` otherwise, and run
 `./scripts/jade-emulator adb` for a physical Android device. The Connect Hardware sheet
 then finds a "Jade Emulator".
 
-See [docs/jade-emulator.md](docs/jade-emulator.md) for what it covers and what still
-needs a physical Jade.
+`JADE_MODE=interactive` shows the device's own screens and waits for `./scripts/jade-emulator
+press`, `pin` and `passphrase`; `JADE_MODE=old` runs firmware 1.0.33. See
+[docs/jade-emulator.md](docs/jade-emulator.md) for the modes, the error recipes and what
+still needs a physical Jade.
 
 #### Pubky Marketplace Journey
 

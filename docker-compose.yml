@@ -430,16 +430,21 @@ services:
       JADE_MNEMONIC: ${JADE_MNEMONIC-all all all all all all all all all all all all}
       JADE_NETWORK: ${JADE_NETWORK:-testnet}
       JADE_WIPE: ${JADE_WIPE:-true}
+      JADE_MODE: ${JADE_MODE:-auto}
+      JADE_PIN: ${JADE_PIN:-012345}
+      JADE_PINSERVER_URL: ${JADE_PINSERVER_URL:-}
+      JADE_PASSPHRASE: ${JADE_PASSPHRASE:-}
     ports:
       - "127.0.0.1:30121:30121" # serial over TCP used by Bitkit and jadepy
+      - "127.0.0.1:30122:30122" # device screen and buttons (JADE_MODE=interactive)
     volumes:
       - jade_emulator_state:/var/lib/jade
     healthcheck:
       test: ["CMD", "python3", "/opt/bitkit-jade/jade-fixture.py", "--health"]
       interval: 5s
       timeout: 10s
-      retries: 6
-      start_period: 180s
+      retries: 12
+      start_period: 300s
     stop_grace_period: 15s
 
   trezor-user-env-mac:
