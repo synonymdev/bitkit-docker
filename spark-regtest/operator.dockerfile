@@ -1,7 +1,10 @@
-# The Spark operator: the last public commit of Breez's mirror of Lightspark's operator, with one patch.
+# The Spark operator: the last public commit of Breez's mirror of Lightspark's operator, with two patches.
 # - operator-status-filter.patch: skip tree node statuses the operator does not know. SDK 0.27 and later ask for
 #   TREE_NODE_STATUS_RETURNED, which this operator never stores, and without it fails the whole query, so wallet sync
 #   fails.
+# - operator-adaptor-v2.patch: sign leaf swaps with version 2 adaptors when the wallet asks (adaptor_v2), as SDK 0.28.3
+#   does. Without it every swap fails ("unable to validate adaptor signature"), so a send pays only exact leaf sums.
+#   The signer moves to lightsparkdev/frost 0248c4b, which adds version 2; version 1 signing is unchanged.
 # Built like breez/spark-sdk's crates/spark-itest/docker/spark-so.dockerfile at 7b6124227, whose entrypoint and
 # config come in through the `itest` context. migrations.dockerfile pins the same commit.
 ARG USER=so
@@ -25,8 +28,8 @@ RUN git init && \
     git fetch --depth 1 origin "$VERSION" && \
     git checkout FETCH_HEAD
 
-COPY operator-status-filter.patch /tmp/
-RUN git apply /tmp/operator-status-filter.patch
+COPY operator-status-filter.patch operator-adaptor-v2.patch /tmp/
+RUN git apply /tmp/operator-status-filter.patch /tmp/operator-adaptor-v2.patch
 
 
 FROM golang:1.27.0-bookworm AS operator-builder

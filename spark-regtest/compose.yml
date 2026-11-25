@@ -4,7 +4,7 @@
 # explains it.
 #
 # Adapted from breez/spark-sdk's regtest/local (MIT, see spark-regtest/README.md):
-# - The operators are the last public Spark operator, breez/spark@b54845c, with one patch (operator.dockerfile).
+# - The operators are the last public Spark operator, breez/spark@b54845c, with two patches (operator.dockerfile).
 # - The SSP, its Lightning node and the LNURL server are built from spark-sdk 7b6124227, the last commit on that
 #   operator; a newer SSP cannot talk to it. The SSP carries one backport so Spark SDK 0.28 wallets work (sspd.dockerfile).
 # - spark-bitcoind is Bitcoin Core 31 peered with bitkit-docker's bitcoind, so both share one chain. Spark's

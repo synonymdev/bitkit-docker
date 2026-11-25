@@ -1,0 +1,581 @@
+diff --git a/protos/frost.proto b/protos/frost.proto
+index 2c9213e..1eaf704 100644
+--- a/protos/frost.proto
++++ b/protos/frost.proto
+@@ -266,6 +266,9 @@ message FrostSigningJob {
+     // share then binds both groups' commitments. Adaptor signatures are not
+     // supported in this scheme.
+     repeated SubUserCommitment subuser_commitments = 10;
++
++    // Version 2 adaptor signing: the adaptor point is part of the FROST binding factor input.
++    bool adaptor_v2 = 11;
+ }
+ 
+ /*
+@@ -335,6 +338,9 @@ message AggregateFrostRequest {
+     // verification, without per-position blame. Adaptor signatures are not
+     // supported in this scheme.
+     repeated SubUserSignatureShare subuser_shares = 11;
++
++    // Version 2 adaptor signing: the adaptor point is part of the FROST binding factor input.
++    bool adaptor_v2 = 12;
+ }
+ 
+ /*
+diff --git a/protos/spark.proto b/protos/spark.proto
+index e37d7cd..c3a901d 100644
+--- a/protos/spark.proto
++++ b/protos/spark.proto
+@@ -1955,6 +1955,8 @@ message AdaptorPublicKeyPackage {
+     bytes adaptor_public_key = 1;
+     bytes direct_adaptor_public_key = 2;
+     bytes direct_from_cpfp_adaptor_public_key = 3;
++    // Version 2 adaptor signing: the adaptor point is part of the FROST binding factor input.
++    bool adaptor_v2 = 4;
+ }
+ 
+ enum TreeNodeStatus {
+diff --git a/protos/spark_internal.proto b/protos/spark_internal.proto
+index 8ff81aa..719734d 100644
+--- a/protos/spark_internal.proto
++++ b/protos/spark_internal.proto
+@@ -173,6 +173,9 @@ message SigningJob {
+     // The user group's round-1 commitments, positions ascending and unique.
+     // Present exactly when the scheme is SIGNING_SCHEME_MPC_USER_GROUP.
+     repeated frost.SubUserCommitment subuser_commitments = 9;
++
++    // Version 2 adaptor signing: the adaptor point is part of the FROST binding factor input.
++    bool adaptor_v2 = 10;
+ }
+ 
+ message FrostRound2Request {
+diff --git a/signer/Cargo.lock b/signer/Cargo.lock
+index f0535a0..230c0be 100644
+--- a/signer/Cargo.lock
++++ b/signer/Cargo.lock
+@@ -889,7 +889,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+ [[package]]
+ name = "frost-core"
+ version = "3.0.0"
+-source = "git+https://github.com/lightsparkdev/frost?rev=997427e5c09e62459230ad711ef3a33fb64b9424#997427e5c09e62459230ad711ef3a33fb64b9424"
++source = "git+https://github.com/lightsparkdev/frost?rev=0248c4be09f878cac5c284244da36ef3a185b001#0248c4be09f878cac5c284244da36ef3a185b001"
+ dependencies = [
+  "byteorder",
+  "const-crc32-nostd",
+@@ -910,7 +910,7 @@ dependencies = [
+ [[package]]
+ name = "frost-rerandomized"
+ version = "3.0.0"
+-source = "git+https://github.com/lightsparkdev/frost?rev=997427e5c09e62459230ad711ef3a33fb64b9424#997427e5c09e62459230ad711ef3a33fb64b9424"
++source = "git+https://github.com/lightsparkdev/frost?rev=0248c4be09f878cac5c284244da36ef3a185b001#0248c4be09f878cac5c284244da36ef3a185b001"
+ dependencies = [
+  "derive-getters",
+  "document-features",
+@@ -922,7 +922,7 @@ dependencies = [
+ [[package]]
+ name = "frost-secp256k1-tr"
+ version = "3.0.0"
+-source = "git+https://github.com/lightsparkdev/frost?rev=997427e5c09e62459230ad711ef3a33fb64b9424#997427e5c09e62459230ad711ef3a33fb64b9424"
++source = "git+https://github.com/lightsparkdev/frost?rev=0248c4be09f878cac5c284244da36ef3a185b001#0248c4be09f878cac5c284244da36ef3a185b001"
+ dependencies = [
+  "document-features",
+  "frost-core",
+diff --git a/signer/Cargo.toml b/signer/Cargo.toml
+index affc4c3..ed66564 100644
+--- a/signer/Cargo.toml
++++ b/signer/Cargo.toml
+@@ -19,8 +19,8 @@ prost-types = "0.13.3"
+ tonic = "0.12.3"
+ tokio = { version = "1.41.0", features = ["macros", "rt-multi-thread", "signal"] }
+ tokio-stream = "0.1.16"
+-frost-secp256k1-tr = { git = "https://github.com/lightsparkdev/frost", rev = "997427e5c09e62459230ad711ef3a33fb64b9424" }
+-frost-core = { git = "https://github.com/lightsparkdev/frost", rev = "997427e5c09e62459230ad711ef3a33fb64b9424" }
++frost-secp256k1-tr = { git = "https://github.com/lightsparkdev/frost", rev = "0248c4be09f878cac5c284244da36ef3a185b001" }
++frost-core = { git = "https://github.com/lightsparkdev/frost", rev = "0248c4be09f878cac5c284244da36ef3a185b001" }
+ rand = "0.8.5"
+ serde = "1.0.214"
+ serde_bytes = "0.11.15"
+diff --git a/signer/spark-frost/src/bridge.rs b/signer/spark-frost/src/bridge.rs
+index ceac0d5..79965ba 100644
+--- a/signer/spark-frost/src/bridge.rs
++++ b/signer/spark-frost/src/bridge.rs
+@@ -80,6 +80,7 @@ pub fn sign_frost(
+         verifying_key: key_package.public_key.clone(),
+         commitments: statechain_commitments,
+         adaptor_public_key: adaptor_public_key.unwrap_or_default(),
++        adaptor_v2: false,
+         signing_scheme: proto::frost::SigningScheme::SingleUser.into(),
+         subuser_commitments: vec![],
+     };
+@@ -123,6 +124,7 @@ pub fn aggregate_frost(
+         verifying_key,
+         user_signature_share: self_signature,
+         adaptor_public_key: adaptor_public_key.unwrap_or_default(),
++        adaptor_v2: false,
+         signing_scheme: proto::frost::SigningScheme::SingleUser.into(),
+         subuser_shares: vec![],
+     };
+diff --git a/signer/spark-frost/src/signing.rs b/signer/spark-frost/src/signing.rs
+index c3f0584..e01bd25 100644
+--- a/signer/spark-frost/src/signing.rs
++++ b/signer/spark-frost/src/signing.rs
+@@ -70,9 +70,15 @@ pub fn frost_build_signin_package(
+     message: &[u8],
+     signing_participants_groups: Option<Vec<BTreeSet<Identifier>>>,
+     adaptor_public_key: &[u8],
++    adaptor_v2: bool,
+ ) -> SigningPackage {
+     let adaptor_public_key = VerifyingKey::deserialize(adaptor_public_key).ok();
+-    SigningPackage::new_with_adaptor(
++    let new_signing_package = if adaptor_v2 {
++        SigningPackage::new_with_adaptor_v2
++    } else {
++        SigningPackage::new_with_adaptor
++    };
++    new_signing_package(
+         signing_commitments,
+         signing_participants_groups,
+         message,
+@@ -348,6 +354,7 @@ fn sign_frost_job(job: &FrostSigningJob, req: &SignFrostRequest) -> Result<Signa
+         &job.message,
+         Some(signing_participants_groups),
+         &job.adaptor_public_key,
++        job.adaptor_v2,
+     );
+ 
+     tracing::info!("Building signing package completed");
+@@ -511,6 +518,7 @@ pub fn aggregate_frost(req: &AggregateFrostRequest) -> Result<AggregateFrostResp
+         &req.message,
+         Some(signing_participants_groups),
+         &req.adaptor_public_key,
++        req.adaptor_v2,
+     );
+ 
+     let signature_shares = frost_signature_shares_from_proto(
+@@ -723,6 +731,7 @@ pub fn validate_signature_share(req: &ValidateSignatureShareRequest) -> Result<(
+         &req.message,
+         Some(signing_participants_groups),
+         &adaptor_key,
++        false,
+     );
+ 
+     let dummy_signing_share = SigningShare::deserialize(&[0; 32])
+@@ -894,6 +903,7 @@ mod tests {
+                 commitments: se_proto_commitments.clone(),
+                 user_commitments: Some(user_proto_commitment.clone()),
+                 adaptor_public_key: vec![],
++                adaptor_v2: false,
+                 signing_scheme: SigningScheme::Unspecified.into(),
+                 subuser_commitments: vec![],
+             };
+@@ -931,6 +941,7 @@ mod tests {
+             commitments: se_proto_commitments.clone(),
+             user_commitments: Some(user_proto_commitment.clone()),
+             adaptor_public_key: vec![],
++            adaptor_v2: false,
+             signing_scheme: SigningScheme::Unspecified.into(),
+             subuser_commitments: vec![],
+         };
+@@ -956,6 +967,7 @@ mod tests {
+             user_public_key: keys.user_vk.serialize().unwrap().to_vec(),
+             user_signature_share,
+             adaptor_public_key: vec![],
++            adaptor_v2: false,
+             signing_scheme: SigningScheme::Unspecified.into(),
+             subuser_shares: vec![],
+         }
+@@ -1067,6 +1079,7 @@ mod tests {
+             commitments: se_proto_commitments.clone(),
+             user_commitments: None,
+             adaptor_public_key: vec![],
++            adaptor_v2: false,
+             signing_scheme: SigningScheme::MpcUserGroup.into(),
+             subuser_commitments: subuser_proto_commitments.to_vec(),
+         };
+@@ -1157,6 +1170,7 @@ mod tests {
+                 commitments: se_proto_commitments.clone(),
+                 user_commitments: None,
+                 adaptor_public_key: vec![],
++                adaptor_v2: false,
+                 signing_scheme: SigningScheme::MpcUserGroup.into(),
+                 subuser_commitments: subuser_proto_commitments.clone(),
+             };
+@@ -1203,6 +1217,7 @@ mod tests {
+             user_public_key: vec![],
+             user_signature_share: vec![],
+             adaptor_public_key: vec![],
++            adaptor_v2: false,
+             signing_scheme: SigningScheme::MpcUserGroup.into(),
+             subuser_shares: subuser_share_protos,
+         }
+@@ -1271,6 +1286,7 @@ mod tests {
+             commitments: HashMap::new(),
+             user_commitments: request.commitments.values().next().cloned(),
+             adaptor_public_key: vec![],
++            adaptor_v2: false,
+             signing_scheme: SigningScheme::MpcUserGroup.into(),
+             subuser_commitments: vec![],
+         };
+@@ -1300,6 +1316,7 @@ mod tests {
+             commitments: request.commitments.clone(),
+             user_commitments: None,
+             adaptor_public_key: vec![],
++            adaptor_v2: false,
+             signing_scheme: SigningScheme::MpcUserGroup.into(),
+             subuser_commitments: request
+                 .subuser_shares
+@@ -1469,6 +1486,7 @@ mod tests {
+             commitments: HashMap::new(),
+             user_commitments: None,
+             adaptor_public_key: vec![],
++            adaptor_v2: false,
+             signing_scheme: SigningScheme::MpcUserGroup.into(),
+             subuser_commitments,
+         };
+@@ -1494,6 +1512,7 @@ mod tests {
+             commitments: HashMap::new(),
+             user_commitments: None,
+             adaptor_public_key: vec![2; 33],
++            adaptor_v2: false,
+             signing_scheme: SigningScheme::MpcUserGroup.into(),
+             subuser_commitments: vec![],
+         };
+@@ -1544,6 +1563,7 @@ mod tests {
+             commitments: HashMap::new(),
+             user_commitments: None,
+             adaptor_public_key: vec![],
++            adaptor_v2: false,
+             signing_scheme: 99,
+             subuser_commitments: vec![],
+         };
+diff --git a/spark/proto/frost/frost.pb.go b/spark/proto/frost/frost.pb.go
+index dd4042f..f1d0a18 100644
+--- a/spark/proto/frost/frost.pb.go
++++ b/spark/proto/frost/frost.pb.go
+@@ -1014,8 +1014,10 @@ type FrostSigningJob struct {
+ 	// share then binds both groups' commitments. Adaptor signatures are not
+ 	// supported in this scheme.
+ 	SubuserCommitments []*SubUserCommitment `protobuf:"bytes,10,rep,name=subuser_commitments,json=subuserCommitments,proto3" json:"subuser_commitments,omitempty"`
+-	unknownFields      protoimpl.UnknownFields
+-	sizeCache          protoimpl.SizeCache
++	// Version 2 adaptor signing: the adaptor point is part of the FROST binding factor input.
++	AdaptorV2     bool `protobuf:"varint,11,opt,name=adaptor_v2,json=adaptorV2,proto3" json:"adaptor_v2,omitempty"`
++	unknownFields protoimpl.UnknownFields
++	sizeCache     protoimpl.SizeCache
+ }
+ 
+ func (x *FrostSigningJob) Reset() {
+@@ -1118,6 +1120,13 @@ func (x *FrostSigningJob) GetSubuserCommitments() []*SubUserCommitment {
+ 	return nil
+ }
+ 
++func (x *FrostSigningJob) GetAdaptorV2() bool {
++	if x != nil {
++		return x.AdaptorV2
++	}
++	return false
++}
++
+ // Signing request
+ //
+ // This request is sent to the server for the signing.
+@@ -1256,6 +1265,8 @@ type AggregateFrostRequest struct {
+ 	// verification, without per-position blame. Adaptor signatures are not
+ 	// supported in this scheme.
+ 	SubuserShares []*SubUserSignatureShare `protobuf:"bytes,11,rep,name=subuser_shares,json=subuserShares,proto3" json:"subuser_shares,omitempty"`
++	// Version 2 adaptor signing: the adaptor point is part of the FROST binding factor input.
++	AdaptorV2     bool `protobuf:"varint,12,opt,name=adaptor_v2,json=adaptorV2,proto3" json:"adaptor_v2,omitempty"`
+ 	unknownFields protoimpl.UnknownFields
+ 	sizeCache     protoimpl.SizeCache
+ }
+@@ -1367,6 +1378,13 @@ func (x *AggregateFrostRequest) GetSubuserShares() []*SubUserSignatureShare {
+ 	return nil
+ }
+ 
++func (x *AggregateFrostRequest) GetAdaptorV2() bool {
++	if x != nil {
++		return x.AdaptorV2
++	}
++	return false
++}
++
+ // Aggregate frost response
+ //
+ // This response is sent from the server to the client after the aggregate signing has been completed.
+@@ -1742,7 +1760,7 @@ const file_frost_proto_rawDesc = "" +
+ 	"\n" +
+ 	"commitment\x18\x02 \x01(\v2\x19.common.SigningCommitmentR\n" +
+ 	"commitment\x12'\n" +
+-	"\x0fsignature_share\x18\x03 \x01(\fR\x0esignatureShare\"\xe8\x04\n" +
++	"\x0fsignature_share\x18\x03 \x01(\fR\x0esignatureShare\"\x87\x05\n" +
+ 	"\x0fFrostSigningJob\x12\x15\n" +
+ 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x18\n" +
+ 	"\amessage\x18\x02 \x01(\fR\amessage\x122\n" +
+@@ -1755,7 +1773,9 @@ const file_frost_proto_rawDesc = "" +
+ 	"\x12adaptor_public_key\x18\b \x01(\fR\x10adaptorPublicKey\x12;\n" +
+ 	"\x0esigning_scheme\x18\t \x01(\x0e2\x14.frost.SigningSchemeR\rsigningScheme\x12I\n" +
+ 	"\x13subuser_commitments\x18\n" +
+-	" \x03(\v2\x18.frost.SubUserCommitmentR\x12subuserCommitments\x1aY\n" +
++	" \x03(\v2\x18.frost.SubUserCommitmentR\x12subuserCommitments\x12\x1d\n" +
++	"\n" +
++	"adaptor_v2\x18\v \x01(\bR\tadaptorV2\x1aY\n" +
+ 	"\x10CommitmentsEntry\x12\x10\n" +
+ 	"\x03key\x18\x01 \x01(\tR\x03key\x12/\n" +
+ 	"\x05value\x18\x02 \x01(\v2\x19.common.SigningCommitmentR\x05value:\x028\x01\"u\n" +
+@@ -1766,7 +1786,7 @@ const file_frost_proto_rawDesc = "" +
+ 	"\aresults\x18\x01 \x03(\v2%.frost.SignFrostResponse.ResultsEntryR\aresults\x1aQ\n" +
+ 	"\fResultsEntry\x12\x10\n" +
+ 	"\x03key\x18\x01 \x01(\tR\x03key\x12+\n" +
+-	"\x05value\x18\x02 \x01(\v2\x15.common.SigningResultR\x05value:\x028\x01\"\x8a\a\n" +
++	"\x05value\x18\x02 \x01(\v2\x15.common.SigningResultR\x05value:\x028\x01\"\xa9\a\n" +
+ 	"\x15AggregateFrostRequest\x12\x18\n" +
+ 	"\amessage\x18\x01 \x01(\fR\amessage\x12\\\n" +
+ 	"\x10signature_shares\x18\x02 \x03(\v21.frost.AggregateFrostRequest.SignatureSharesEntryR\x0fsignatureShares\x12S\n" +
+@@ -1779,7 +1799,9 @@ const file_frost_proto_rawDesc = "" +
+ 	"\x12adaptor_public_key\x18\t \x01(\fR\x10adaptorPublicKey\x12;\n" +
+ 	"\x0esigning_scheme\x18\n" +
+ 	" \x01(\x0e2\x14.frost.SigningSchemeR\rsigningScheme\x12C\n" +
+-	"\x0esubuser_shares\x18\v \x03(\v2\x1c.frost.SubUserSignatureShareR\rsubuserShares\x1aB\n" +
++	"\x0esubuser_shares\x18\v \x03(\v2\x1c.frost.SubUserSignatureShareR\rsubuserShares\x12\x1d\n" +
++	"\n" +
++	"adaptor_v2\x18\f \x01(\bR\tadaptorV2\x1aB\n" +
+ 	"\x14SignatureSharesEntry\x12\x10\n" +
+ 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+ 	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\x1a?\n" +
+diff --git a/spark/proto/frost/frost.pb.validate.go b/spark/proto/frost/frost.pb.validate.go
+index 99f41ff..b746f93 100644
+--- a/spark/proto/frost/frost.pb.validate.go
++++ b/spark/proto/frost/frost.pb.validate.go
+@@ -2138,6 +2138,8 @@ func (m *FrostSigningJob) validate(all bool) error {
+ 
+ 	}
+ 
++	// no validation rules for AdaptorV2
++
+ 	if len(errors) > 0 {
+ 		return FrostSigningJobMultiError(errors)
+ 	}
+@@ -2647,6 +2649,8 @@ func (m *AggregateFrostRequest) validate(all bool) error {
+ 
+ 	}
+ 
++	// no validation rules for AdaptorV2
++
+ 	if len(errors) > 0 {
+ 		return AggregateFrostRequestMultiError(errors)
+ 	}
+diff --git a/spark/proto/spark/spark.pb.go b/spark/proto/spark/spark.pb.go
+index 39fa1f5..2a906c8 100644
+--- a/spark/proto/spark/spark.pb.go
++++ b/spark/proto/spark/spark.pb.go
+@@ -12829,8 +12829,10 @@ type AdaptorPublicKeyPackage struct {
+ 	AdaptorPublicKey               []byte                 `protobuf:"bytes,1,opt,name=adaptor_public_key,json=adaptorPublicKey,proto3" json:"adaptor_public_key,omitempty"`
+ 	DirectAdaptorPublicKey         []byte                 `protobuf:"bytes,2,opt,name=direct_adaptor_public_key,json=directAdaptorPublicKey,proto3" json:"direct_adaptor_public_key,omitempty"`
+ 	DirectFromCpfpAdaptorPublicKey []byte                 `protobuf:"bytes,3,opt,name=direct_from_cpfp_adaptor_public_key,json=directFromCpfpAdaptorPublicKey,proto3" json:"direct_from_cpfp_adaptor_public_key,omitempty"`
+-	unknownFields                  protoimpl.UnknownFields
+-	sizeCache                      protoimpl.SizeCache
++	// Version 2 adaptor signing: the adaptor point is part of the FROST binding factor input.
++	AdaptorV2     bool `protobuf:"varint,4,opt,name=adaptor_v2,json=adaptorV2,proto3" json:"adaptor_v2,omitempty"`
++	unknownFields protoimpl.UnknownFields
++	sizeCache     protoimpl.SizeCache
+ }
+ 
+ func (x *AdaptorPublicKeyPackage) Reset() {
+@@ -12884,6 +12886,13 @@ func (x *AdaptorPublicKeyPackage) GetDirectFromCpfpAdaptorPublicKey() []byte {
+ 	return nil
+ }
+ 
++func (x *AdaptorPublicKeyPackage) GetAdaptorV2() bool {
++	if x != nil {
++		return x.AdaptorV2
++	}
++	return false
++}
++
+ type WalletSetting struct {
+ 	state                   protoimpl.MessageState `protogen:"open.v1"`
+ 	OwnerIdentityPublicKey  []byte                 `protobuf:"bytes,1,opt,name=owner_identity_public_key,json=ownerIdentityPublicKey,proto3" json:"owner_identity_public_key,omitempty"`
+@@ -15194,11 +15203,13 @@ const file_spark_proto_rawDesc = "" +
+ 	"\x13adaptor_public_keys\x18\x02 \x01(\v2\x1e.spark.AdaptorPublicKeyPackageR\x11adaptorPublicKeys\"\x9d\x01\n" +
+ 	"#InitiateSwapPrimaryTransferResponse\x12+\n" +
+ 	"\btransfer\x18\x01 \x01(\v2\x0f.spark.TransferR\btransfer\x12I\n" +
+-	"\x0fsigning_results\x18\x02 \x03(\v2 .spark.LeafRefundTxSigningResultR\x0esigningResults\"\xcf\x01\n" +
++	"\x0fsigning_results\x18\x02 \x03(\v2 .spark.LeafRefundTxSigningResultR\x0esigningResults\"\xee\x01\n" +
+ 	"\x17AdaptorPublicKeyPackage\x12,\n" +
+ 	"\x12adaptor_public_key\x18\x01 \x01(\fR\x10adaptorPublicKey\x129\n" +
+ 	"\x19direct_adaptor_public_key\x18\x02 \x01(\fR\x16directAdaptorPublicKey\x12K\n" +
+-	"#direct_from_cpfp_adaptor_public_key\x18\x03 \x01(\fR\x1edirectFromCpfpAdaptorPublicKey\"\xe6\x01\n" +
++	"#direct_from_cpfp_adaptor_public_key\x18\x03 \x01(\fR\x1edirectFromCpfpAdaptorPublicKey\x12\x1d\n" +
++	"\n" +
++	"adaptor_v2\x18\x04 \x01(\bR\tadaptorV2\"\xe6\x01\n" +
+ 	"\rWalletSetting\x12B\n" +
+ 	"\x19owner_identity_public_key\x18\x01 \x01(\fB\a\xfaB\x04z\x02h!R\x16ownerIdentityPublicKey\x12'\n" +
+ 	"\x0fprivate_enabled\x18\x02 \x01(\bR\x0eprivateEnabled\x12I\n" +
+diff --git a/spark/proto/spark/spark.pb.validate.go b/spark/proto/spark/spark.pb.validate.go
+index 05a5026..1698a0d 100644
+--- a/spark/proto/spark/spark.pb.validate.go
++++ b/spark/proto/spark/spark.pb.validate.go
+@@ -26689,6 +26689,8 @@ func (m *AdaptorPublicKeyPackage) validate(all bool) error {
+ 
+ 	// no validation rules for DirectFromCpfpAdaptorPublicKey
+ 
++	// no validation rules for AdaptorV2
++
+ 	if len(errors) > 0 {
+ 		return AdaptorPublicKeyPackageMultiError(errors)
+ 	}
+diff --git a/spark/proto/spark_internal/spark_internal.pb.go b/spark/proto/spark_internal/spark_internal.pb.go
+index cd966bd..ddecbf5 100644
+--- a/spark/proto/spark_internal/spark_internal.pb.go
++++ b/spark/proto/spark_internal/spark_internal.pb.go
+@@ -449,8 +449,10 @@ type SigningJob struct {
+ 	// The user group's round-1 commitments, positions ascending and unique.
+ 	// Present exactly when the scheme is SIGNING_SCHEME_MPC_USER_GROUP.
+ 	SubuserCommitments []*frost.SubUserCommitment `protobuf:"bytes,9,rep,name=subuser_commitments,json=subuserCommitments,proto3" json:"subuser_commitments,omitempty"`
+-	unknownFields      protoimpl.UnknownFields
+-	sizeCache          protoimpl.SizeCache
++	// Version 2 adaptor signing: the adaptor point is part of the FROST binding factor input.
++	AdaptorV2     bool `protobuf:"varint,10,opt,name=adaptor_v2,json=adaptorV2,proto3" json:"adaptor_v2,omitempty"`
++	unknownFields protoimpl.UnknownFields
++	sizeCache     protoimpl.SizeCache
+ }
+ 
+ func (x *SigningJob) Reset() {
+@@ -546,6 +548,13 @@ func (x *SigningJob) GetSubuserCommitments() []*frost.SubUserCommitment {
+ 	return nil
+ }
+ 
++func (x *SigningJob) GetAdaptorV2() bool {
++	if x != nil {
++		return x.AdaptorV2
++	}
++	return false
++}
++
+ type FrostRound2Request struct {
+ 	state         protoimpl.MessageState `protogen:"open.v1"`
+ 	SigningJobs   []*SigningJob          `protobuf:"bytes,1,rep,name=signing_jobs,json=signingJobs,proto3" json:"signing_jobs,omitempty"`
+@@ -8086,7 +8095,7 @@ const file_spark_internal_proto_rawDesc = "" +
+ 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+ 	"\x05value\x18\x02 \x01(\fR\x05value:\x028\x01\"a\n" +
+ 	"\x13FrostRound1Response\x12J\n" +
+-	"\x13signing_commitments\x18\x01 \x03(\v2\x19.common.SigningCommitmentR\x12signingCommitments\"\xb3\x04\n" +
++	"\x13signing_commitments\x18\x01 \x03(\v2\x19.common.SigningCommitmentR\x12signingCommitments\"\xd2\x04\n" +
+ 	"\n" +
+ 	"SigningJob\x12\x1f\n" +
+ 	"\x06job_id\x18\x01 \x01(\tB\b\xfaB\x05r\x03\xb0\x01\x01R\x05jobId\x12\x18\n" +
+@@ -8098,7 +8107,10 @@ const file_spark_internal_proto_rawDesc = "" +
+ 	"\x10user_commitments\x18\x06 \x01(\v2\x19.common.SigningCommitmentR\x0fuserCommitments\x12,\n" +
+ 	"\x12adaptor_public_key\x18\a \x01(\fR\x10adaptorPublicKey\x12;\n" +
+ 	"\x0esigning_scheme\x18\b \x01(\x0e2\x14.frost.SigningSchemeR\rsigningScheme\x12I\n" +
+-	"\x13subuser_commitments\x18\t \x03(\v2\x18.frost.SubUserCommitmentR\x12subuserCommitments\x1aY\n" +
++	"\x13subuser_commitments\x18\t \x03(\v2\x18.frost.SubUserCommitmentR\x12subuserCommitments\x12\x1d\n" +
++	"\n" +
++	"adaptor_v2\x18\n" +
++	" \x01(\bR\tadaptorV2\x1aY\n" +
+ 	"\x10CommitmentsEntry\x12\x10\n" +
+ 	"\x03key\x18\x01 \x01(\tR\x03key\x12/\n" +
+ 	"\x05value\x18\x02 \x01(\v2\x19.common.SigningCommitmentR\x05value:\x028\x01\"S\n" +
+diff --git a/spark/proto/spark_internal/spark_internal.pb.validate.go b/spark/proto/spark_internal/spark_internal.pb.validate.go
+index 903d5c1..d702d09 100644
+--- a/spark/proto/spark_internal/spark_internal.pb.validate.go
++++ b/spark/proto/spark_internal/spark_internal.pb.validate.go
+@@ -769,6 +769,8 @@ func (m *SigningJob) validate(all bool) error {
+ 
+ 	}
+ 
++	// no validation rules for AdaptorV2
++
+ 	if len(errors) > 0 {
+ 		return SigningJobMultiError(errors)
+ 	}
+diff --git a/spark/so/handler/frost_aggregation.go b/spark/so/handler/frost_aggregation.go
+index 15deef2..87d4fe9 100644
+--- a/spark/so/handler/frost_aggregation.go
++++ b/spark/so/handler/frost_aggregation.go
+@@ -322,6 +322,11 @@ func (b *frostAggregationBatch) aggregate(ctx context.Context, frostClient pbfro
+ 		return signatures, nil
+ 	}
+ 	jobKeys := slices.Sorted(maps.Keys(b.requests))
++	if helper.AdaptorV2(ctx) {
++		for _, req := range b.requests {
++			req.AdaptorV2 = len(req.GetAdaptorPublicKey()) > 0
++		}
++	}
+ 
+ 	err := b.aggregateBatched(ctx, frostClient, jobKeys, signatures)
+ 	switch {
+diff --git a/spark/so/handler/signing_handler/frost_signing_handler.go b/spark/so/handler/signing_handler/frost_signing_handler.go
+index fe9a98d..3efad06 100644
+--- a/spark/so/handler/signing_handler/frost_signing_handler.go
++++ b/spark/so/handler/signing_handler/frost_signing_handler.go
+@@ -224,6 +224,7 @@ func (h *FrostSigningHandler) FrostRound2WithKeyPackages(ctx context.Context, re
+ 			Commitments:        job.GetCommitments(),
+ 			UserCommitments:    job.GetUserCommitments(),
+ 			AdaptorPublicKey:   job.GetAdaptorPublicKey(),
++			AdaptorV2:          job.GetAdaptorV2(),
+ 			SigningScheme:      job.GetSigningScheme(),
+ 			SubuserCommitments: job.GetSubuserCommitments(),
+ 		}
+@@ -292,6 +293,12 @@ func retryFingerprint(job *pb.SigningJob) []byte {
+ 		}
+ 	}
+ 
++	// bitkit-docker: a version 2 adaptor enters the binding factor too, so it is part of the fingerprint. Appended
++	// only when set, so version 1 fingerprints keep their bytes.
++	if job.GetAdaptorV2() {
++		hashState.Write([]byte("adaptor_v2"))
++	}
++
+ 	return hashState.Sum(nil)
+ }
+ 
+diff --git a/spark/so/handler/transfer_handler.go b/spark/so/handler/transfer_handler.go
+index f2109a4..d290cbf 100644
+--- a/spark/so/handler/transfer_handler.go
++++ b/spark/so/handler/transfer_handler.go
+@@ -915,6 +915,11 @@ func (h *TransferHandler) InitiateSwapPrimaryTransfer(ctx context.Context, req *
+ 		return h.initiateSwapPrimaryTransferConsensus(ctx, req)
+ 	}
+ 
++	// bitkit-docker: Spark SDK 0.28.3 signs its share with a version 2 adaptor (adaptor_v2), which binds the adaptor
++	// point into the FROST binding factors. The operators sign and aggregate the same way, or the signature is invalid.
++	// The SSP's counter transfer sends no flag and stays on version 1. The consensus path above, off on this stack,
++	// does not carry the flag.
++	ctx = helper.WithAdaptorV2(ctx, req.GetAdaptorPublicKeys().GetAdaptorV2())
+ 	return h.startTransferInternal(ctx, req.GetTransfer(), st.TransferTypePrimarySwapV3, adaptorPublicKey, keys.Public{}, keys.Public{}, true, &SwapV3Package{primaryTransferId: uuid.Nil})
+ }
+ 
+diff --git a/spark/so/helper/signing_coordinator.go b/spark/so/helper/signing_coordinator.go
+index 271335c..1463660 100644
+--- a/spark/so/helper/signing_coordinator.go
++++ b/spark/so/helper/signing_coordinator.go
+@@ -163,6 +163,20 @@ func frostRound1(ctx context.Context, config *so.Config, operatorSelection *Oper
+ 	return results, nil
+ }
+ 
++type adaptorV2Key struct{}
++
++// WithAdaptorV2 marks the adaptor signing jobs run under ctx as version 2: the adaptor point is part of the FROST
++// binding factor input, as the client signed its share.
++func WithAdaptorV2(ctx context.Context, v2 bool) context.Context {
++	return context.WithValue(ctx, adaptorV2Key{}, v2)
++}
++
++// AdaptorV2 reports whether WithAdaptorV2 marked ctx.
++func AdaptorV2(ctx context.Context) bool {
++	v2, _ := ctx.Value(adaptorV2Key{}).(bool)
++	return v2
++}
++
+ // frostRound2 performs the second round of the Frost signing. It gathers the signature shares from all operators.
+ func frostRound2(
+ 	ctx context.Context,
+@@ -200,6 +214,7 @@ func frostRound2(
+ 				Commitments:      commitments,
+ 				UserCommitments:  userCommitmentProto,
+ 				AdaptorPublicKey: adaptorPublicKeyBytes,
++				AdaptorV2:        adaptorPublicKeyBytes != nil && AdaptorV2(ctx),
+ 			}
+ 		}
+ 

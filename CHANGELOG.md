@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Simplify LND funding step in README to a single command instead of clipboard-based two-step flow
 
 ### Fixed
+- Swap Spark leaves on the `spark` profile with Spark SDK 0.28.3 wallets, so a send pays any amount instead of only exact leaf sums
 - Build the `vss-server` image again: bump the submodule to synonymdev/vss-server#3, which moves its Dockerfile to Debian bookworm after bullseye's security packages left `deb.debian.org`
 - Split the USDT history smoke's 256-block mining step into sequential 16-block RPC calls to avoid timeouts on slower hosts
 - Build and run Paykit Server v0.1.0-rc11 and later on the local marketplace route (`./pubky-marketplace build-paykit` with its pins), with a completed headless purchase
