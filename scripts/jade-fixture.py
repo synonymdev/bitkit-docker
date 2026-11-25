@@ -53,6 +53,8 @@ PROVIDE_DISPLAY = 0
 BUTTON_GAP_S = 0.25
 DRAIN_S = 1
 PIN_PAD_TIMEOUT_S = 30
+PIN_ADVANCE_TIMEOUT_S = 3
+PIN_PRESS_ATTEMPTS = 3
 TIMEOUT_SCREEN = "/tmp/jade-timeout.png"
 DEVICE = f"tcp:127.0.0.1:{PORT}"
 BOOT_TIMEOUT_S = 120
@@ -138,8 +140,8 @@ def is_green(pixel):
     return g > 100 and r < 80 and b < 160
 
 
-def pin_pad_position():
-    """Index of the PIN pad's active digit box, or None while the pad is not on screen."""
+def pin_pad_state():
+    """The PIN pad's active digit box and its pixels, or (None, None) while the pad is not on screen."""
     rows = frame()
     # The pad is six 35 px boxes between x 15 and 224, y 42 to 105; only the active one is filled green.
     # After a wrong PIN an "attempts remaining" line pushes the boxes about 15 px lower.
@@ -153,8 +155,14 @@ def pin_pad_position():
             )
         ]
         if len(filled) == 1:
-            return filled[0]
-    return None
+            box = filled[0]
+            pixels = tuple(tuple(rows[y][15 + 35 * box:50 + 35 * box]) for y in range(42 + shift, 106 + shift))
+            return box, pixels
+    return None, None
+
+
+def pin_pad_position():
+    return pin_pad_state()[0]
 
 
 def is_continue_screen():
@@ -163,9 +171,20 @@ def is_continue_screen():
     return all(sum(is_green(pixel) for pixel in rows[y]) >= 200 for y in (118, 128))
 
 
+def screen_check(condition):
+    # A busy host can stall the display socket for a moment; that only means not ready yet.
+    import websocket  # python3-websocket
+
+    try:
+        return condition()
+    except (OSError, websocket.WebSocketException) as error:
+        log(f"device screen unreadable, retrying: {error}")
+        return False
+
+
 def wait_for(condition, timeout_s, what):
     deadline = time.monotonic() + timeout_s
-    while not condition():
+    while not screen_check(condition):
         if time.monotonic() > deadline:
             screen(TIMEOUT_SCREEN)
             raise RuntimeError(f"timed out waiting for {what}; the device screen is in {TIMEOUT_SCREEN}")
@@ -183,8 +202,26 @@ def type_pin(pin):
         return pin_pad_position() == index
 
     for index, digit in enumerate(pin):
-        wait_for(lambda: pad_ready(index), PIN_PAD_TIMEOUT_S, f"PIN digit {index + 1} on the device")
-        press(*(["right"] * int(digit) + ["front"]))
+        what = f"PIN digit {index + 1} on the device"
+        wait_for(lambda: pad_ready(index), PIN_PAD_TIMEOUT_S, what)
+        _, before = pin_pad_state()
+        for _attempt in range(PIN_PRESS_ATTEMPTS):
+            press(*(["right"] * int(digit) + ["front"]))
+            deadline = time.monotonic() + PIN_ADVANCE_TIMEOUT_S
+            position, pixels = pin_pad_state()
+            while position == index and time.monotonic() < deadline:
+                time.sleep(0.25)
+                position, pixels = pin_pad_state()
+            if position != index:
+                break
+            # A pad that just appeared can drop presses; press again only when none registered.
+            if pixels != before:
+                screen(TIMEOUT_SCREEN)
+                raise RuntimeError(f"{what} took only part of its presses; the screen is in {TIMEOUT_SCREEN}")
+            log(f"{what} ignored its presses; pressing again")
+        else:
+            screen(TIMEOUT_SCREEN)
+            raise RuntimeError(f"{what} ignored {PIN_PRESS_ATTEMPTS} presses; the screen is in {TIMEOUT_SCREEN}")
 
 
 def frame():

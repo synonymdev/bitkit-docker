@@ -27,7 +27,8 @@ deterministic test device for Bitkit's Jade flows.
 `press` takes `left`, `right`, `click` (wheel press) and `front` (the select button), each
 press 0.25 s apart. The interactive PIN pad starts every digit at 0, so `pin` steps right to
 each digit and selects it, waiting on the screen for each digit's box first, so it can run as soon
-as the app asks for the PIN. A wrong `pin` shows the device's own "Incorrect PIN!" screen; the
+as the app asks for the PIN. A digit whose box shows no change after its presses (a pad that just
+appeared can drop them) is pressed again. A wrong `pin` shows the device's own "Incorrect PIN!" screen; the
 next `pin` presses its Continue first and finds the retry pad, which sits lower under its
 "attempts remaining" line.
 `passphrase` types lowercase letters and spaces on the device's Manual passphrase keyboard, reading
