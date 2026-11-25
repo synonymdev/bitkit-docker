@@ -26,7 +26,9 @@ these base ports and forward them to their seat's loopback address. Declare this
 profile as an on-demand offer; run no global shared device instance.
 
 Every start wipes only its own emulator and loads the public `all all ...` test
-seed, no PIN, no passphrase and the `Bitkit Test Trezor` label. Its two named
+seed, no PIN (unless `TREZOR_PIN` is set), no passphrase and the `Bitkit Test Trezor`
+label. `TREZOR_MODEL` and `TREZOR_FIRMWARE` pick another emulator, as for the
+manual User Env. Its two named
 volumes belong to the Compose project. Bridge enumeration must contain a device,
 and controller status must report both emulator and Bridge running, before the
 container is healthy. Confirmations remain controlled by the dashboard or
@@ -42,6 +44,40 @@ it before connecting an app; it neither runs an app journey nor broadcasts.
 The fixture does not run its own Bitcoin stack. Use the existing regtest node and
 Electrum server to fund the derived address and broadcast signed transactions.
 Avoid starting the manual User Env alongside this profile on the same base ports.
+
+## PIN entry
+
+Set `TREZOR_PIN` when starting either the fixture or the manual User Env. Setup
+loads the seed with that PIN and then locks the device, so the app finds it locked
+as after power-on and must unlock it before reading keys:
+
+```bash
+TREZOR_PIN=1234 ./scripts/trezor-emulator start
+TREZOR_PIN=1234 TREZOR_MODEL=T1B1 TREZOR_FIRMWARE=1-main ./scripts/trezor-emulator start
+TREZOR_PIN=1234 docker compose --profile trezor-emulator up -d --wait trezor-emulator
+```
+
+Once the app asks for the PIN, enter it, right or wrong, with `pin`:
+
+```bash
+./scripts/trezor-emulator pin 1234    # right PIN
+./scripts/trezor-emulator pin 9999    # wrong PIN
+TREZOR_SERVICE=trezor-emulator TREZOR_PROFILE=trezor-emulator ./scripts/trezor-emulator pin 1234   # fixture
+```
+
+| Model | Where the PIN goes | What `pin` does |
+|---|---|---|
+| T2T1, T3T1 | The device's own PIN keyboard; the app waits | Types the PIN through the debug link, then prints `PIN accepted.` or `PIN rejected: the device asks for it again.` |
+| T1B1 | The app's PIN matrix (Bitkit's PIN dialog) | Prints the keys to tap in the app's matrix (7 8 9 top row, 1 2 3 bottom row) for the device's current scrambled layout |
+
+On T1B1 a wrong PIN fails the app's request with `PIN invalid`, and the next
+request shows a new matrix, so run `pin` again for it. On T2T1 and T3T1 the device
+asks again after a wrong PIN with a freshly shuffled keyboard. Every start wipes the
+device, which resets the failed-attempt count. `pin` exits with an error when the
+device is not asking for a PIN.
+
+`get-address` and `status --json` fail while the device is locked, and
+`trezor-fixture-check.py` waits for the PIN; unlock the device first.
 
 ## Manual User Env
 
@@ -67,7 +103,7 @@ The default emulator configuration is:
 - firmware: `2-main`
 - bridge: `node-bridge`
 - mnemonic: `all all all all all all all all all all all all`
-- pin: empty
+- pin: empty (`TREZOR_PIN`, see PIN entry)
 - passphrase protection: off
 - label: `Bitkit Test Trezor`
 
@@ -123,6 +159,7 @@ Use this checklist when reviewing any Bitkit app PR that needs the Trezor emulat
 
 ```bash
 ./scripts/trezor-emulator status
+./scripts/trezor-emulator pin 1234
 ./scripts/trezor-emulator logs
 ./scripts/trezor-emulator stop
 ```

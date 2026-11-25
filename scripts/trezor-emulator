@@ -19,6 +19,8 @@ Commands:
   status      Show User Env bridge/emulator status and Bridge enumerate output
   status --json   Print the current E2E fixture as JSON
   get-address     Print the current fixture receive address
+  pin N       Enter PIN N the device asks for: typed on a T2T1 or T3T1 screen;
+              for T1B1, prints the keys to tap in the app's PIN matrix
   pull            Pull the selected User Env service image
   adb         Reverse the Bridge port for a physical Android device
   stop        Stop the emulator and Bridge; stop the repo-managed User Env service
@@ -34,6 +36,7 @@ Useful environment overrides:
   TREZOR_ADDRESS_COIN=Regtest
   TREZOR_ADDRESS_PATH="m/84h/1h/0h/0/0"
   TREZOR_LABEL="Bitkit Test Trezor"
+  TREZOR_PIN=                 a PIN locks the device after start, so the app asks for it
   TREZOR_WIPE=false
 EOF
 }
@@ -264,6 +267,12 @@ resolve_mnemonic() {
   fi
 }
 
+lock_if_pin() {
+  if [[ -n "${TREZOR_PIN:-}" ]]; then
+    controller lock
+  fi
+}
+
 start() {
   local mnemonic address
   if [[ "${1:-}" == --json ]]; then
@@ -271,6 +280,7 @@ start() {
     mnemonic="$(resolve_mnemonic)"
     TREZOR_MNEMONIC="$mnemonic" controller setup >&2
     address="$(controller get-address)"
+    lock_if_pin >&2
     print_json_summary "$mnemonic" "$address"
     return
   fi
@@ -278,6 +288,7 @@ start() {
   start_env
   mnemonic="$(resolve_mnemonic)"
   TREZOR_MNEMONIC="$mnemonic" controller setup
+  lock_if_pin
   echo
   echo "Bridge enumerate:"
   bridge_enumerate
@@ -348,6 +359,10 @@ main() {
       "$command" "$@"
       ;;
     get-address) controller get-address ;;
+    pin)
+      [[ $# -eq 1 ]] || { usage >&2; exit 1; }
+      controller pin "$1"
+      ;;
     pull) compose_with_profile pull "$TREZOR_SERVICE" ;;
     adb) adb_reverse ;;
     stop) stop ;;

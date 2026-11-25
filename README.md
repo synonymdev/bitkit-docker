@@ -635,7 +635,9 @@ Point the simulator's Bridge URL at `http://127.0.0.1:21325`. The dashboard is a
 `http://127.0.0.1:23902`, the controller at `ws://127.0.0.1:23901`, and noVNC at
 `http://127.0.0.1:23680`. For projects that remap ports, use their published Bridge
 port (or the simulator seat's forwarded address). The device uses the `all all
-...` seed, no PIN or passphrase, and the label `Bitkit Test Trezor`. Each project's
+...` seed, no PIN or passphrase, and the label `Bitkit Test Trezor`; `TREZOR_PIN`,
+`TREZOR_MODEL` and `TREZOR_FIRMWARE` override them (see PIN entry in
+[docs/trezor-emulator.md](docs/trezor-emulator.md#pin-entry)). Each project's
 volumes are separate, and each startup wipes and initializes its own emulator.
 The image's digest fixes both the bundled firmware and Bridge; startup downloads
 nothing. Health requires setup to finish and both Bridge and the emulator to run.
