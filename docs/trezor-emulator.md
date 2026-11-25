@@ -76,8 +76,9 @@ asks again after a wrong PIN with a freshly shuffled keyboard. Every start wipes
 device, which resets the failed-attempt count. `pin` exits with an error when the
 device is not asking for a PIN.
 
-`get-address` and `status --json` fail while the device is locked, and
-`trezor-fixture-check.py` waits for the PIN; unlock the device first.
+`get-address` and `status --json` fail while the device is locked; unlock it
+first. `trezor-fixture-check.py` checks the default fixture, which has no PIN, so
+it fails when `TREZOR_PIN` is set.
 
 ## Manual User Env
 
