@@ -147,8 +147,11 @@ async def pin(value: str) -> None:
         """The PIN keyboard's digit order, or None when no PIN keyboard shows."""
         state = await send({"type": "emulator-get-debug-state", "id": next_id()}, quiet=True)
         for token in state["response"].get("tokens") or []:
-            component = json.loads(token)
-            if component.get("component") == "PinKeyboard":
+            try:
+                component = json.loads(token)
+            except json.JSONDecodeError:
+                continue  # an empty trace while no layout shows
+            if isinstance(component, dict) and component.get("component") == "PinKeyboard":
                 return component["digits_order"]
         return None
 

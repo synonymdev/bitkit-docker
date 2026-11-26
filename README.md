@@ -672,6 +672,16 @@ The macOS Trezor User Env service is included in the default `docker compose up 
 
 The helper starts the official Trezor User Env without its regtest stack, launches Bridge, wipes a deterministic T2T1 emulator, and sets it up with the `all all ...` seed and `Bitkit Test Trezor` label. It uses `scripts/trezor-controller.py` inside the container to talk to the User Env websocket controller.
 
+To test the apps' PIN flows, start with a PIN, which leaves the device locked, then enter it, right or wrong, once the app asks:
+
+```bash
+TREZOR_PIN=1234 ./scripts/trezor-emulator start
+./scripts/trezor-emulator pin 9999    # wrong PIN
+./scripts/trezor-emulator pin 1234    # right PIN
+```
+
+On T2T1 and T3T1 `pin` types the PIN on the device's keyboard and prints `PIN accepted.` or `PIN rejected: the device asks for it again.` On T1B1 (`TREZOR_MODEL=T1B1 TREZOR_FIRMWARE=1-main`) it prints the keys to tap in the app's PIN matrix; run it again for each new matrix. For the fixture, start it with `TREZOR_PIN=1234 docker compose --profile trezor-emulator up -d --build --wait trezor-emulator` and prefix `pin` with `TREZOR_SERVICE=trezor-emulator TREZOR_PROFILE=trezor-emulator`. See PIN entry in [docs/trezor-emulator.md](docs/trezor-emulator.md#pin-entry).
+
 ##### Bitkit Android
 
 For a physical phone, reverse the Bridge port and install the dev build with Bridge enabled:

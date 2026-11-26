@@ -54,7 +54,7 @@ as after power-on and must unlock it before reading keys:
 ```bash
 TREZOR_PIN=1234 ./scripts/trezor-emulator start
 TREZOR_PIN=1234 TREZOR_MODEL=T1B1 TREZOR_FIRMWARE=1-main ./scripts/trezor-emulator start
-TREZOR_PIN=1234 docker compose --profile trezor-emulator up -d --wait trezor-emulator
+TREZOR_PIN=1234 docker compose --profile trezor-emulator up -d --build --wait trezor-emulator
 ```
 
 Once the app asks for the PIN, enter it, right or wrong, with `pin`:

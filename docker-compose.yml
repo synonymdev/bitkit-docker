@@ -387,7 +387,7 @@ services:
   # Its firmware and Bridge come from the same digest as the manual User Env.
   trezor-emulator:
     profiles: [trezor-emulator]
-    image: bitkit-docker/trezor-emulator:fixture-v1
+    image: bitkit-docker/trezor-emulator:fixture-v2
     build:
       context: ./scripts
       dockerfile: trezor-fixture.Dockerfile
