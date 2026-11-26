@@ -812,8 +812,8 @@ and network mismatch messages:
 
 ```bash
 JADE_MODE=interactive ./scripts/jade-emulator start   # then tap Connect in the app
-./scripts/jade-emulator pin 999999                    # wrong PIN
-./scripts/jade-emulator pin 012345                    # right PIN
+./scripts/jade-emulator pin 999999                    # wrong PIN: the app shows the wrong PIN message
+./scripts/jade-emulator pin 012345                    # tap Connect again first, then the right PIN pairs
 JADE_NETWORK=mainnet ./scripts/jade-emulator start    # network mismatch with a regtest app
 ```
 
