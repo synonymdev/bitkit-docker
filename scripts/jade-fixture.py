@@ -55,6 +55,7 @@ DRAIN_S = 1
 PIN_PAD_TIMEOUT_S = 30
 PIN_ADVANCE_TIMEOUT_S = 3
 PIN_PRESS_ATTEMPTS = 3
+FRAME_ATTEMPTS = 3
 TIMEOUT_SCREEN = "/tmp/jade-timeout.png"
 DEVICE = f"tcp:127.0.0.1:{PORT}"
 BOOT_TIMEOUT_S = 120
@@ -226,16 +227,19 @@ def type_pin(pin):
 
 def frame():
     """The display as rows of (r, g, b) tuples."""
+    import websocket  # python3-websocket
+
     width, height = display_size()
-    ws = display()
-    try:
-        ws.send_binary(bytes([PROVIDE_DISPLAY]))
-        pixels = bytearray()
-        while len(pixels) < width * height * 2:
-            frame = ws.recv()
-            pixels += frame[1:]
-    finally:
-        ws.close()
+    # A busy host can stall the display socket for a moment, so a read is retried before it fails.
+    for attempt in range(FRAME_ATTEMPTS):
+        try:
+            pixels = read_display(width * height * 2)
+            break
+        except (OSError, websocket.WebSocketException) as error:
+            if attempt == FRAME_ATTEMPTS - 1:
+                raise
+            log(f"device screen unreadable, retrying: {error}")
+            time.sleep(1)
     rows = []
     for y in range(height):
         row = []
@@ -246,6 +250,18 @@ def frame():
             row.append(((value >> 11 & 0x1F) * 255 // 31, (value >> 5 & 0x3F) * 255 // 63, (value & 0x1F) * 255 // 31))
         rows.append(row)
     return rows
+
+
+def read_display(size):
+    ws = display()
+    try:
+        ws.send_binary(bytes([PROVIDE_DISPLAY]))
+        pixels = bytearray()
+        while len(pixels) < size:
+            pixels += ws.recv()[1:]
+        return pixels
+    finally:
+        ws.close()
 
 
 def screen(path):
@@ -326,7 +342,6 @@ def later(delay_s, action):
 def setup():
     mnemonic = os.environ.get("JADE_MNEMONIC", "").strip()
     network = os.environ.get("JADE_NETWORK", "testnet")
-    pinserver_url = os.environ.get("JADE_PINSERVER_URL", "").strip()
     jade = connect()
     try:
         info = jade.get_version_info()
@@ -344,14 +359,23 @@ def setup():
         if not jade.auth_user(network):
             raise RuntimeError("PIN setup through the pinserver failed")
         log(f"loaded the mnemonic and set the PIN for {network}")
-        if pinserver_url:
-            if MODE == "interactive":
-                later(3, lambda: press("front"))
-            jade.set_pinserver(urlA=pinserver_url)
-            log(f"pointed the device at pinserver {pinserver_url}")
+        # A mainnet device unlocks once more through the default pinserver first, so it switches after that.
+        if network != "mainnet":
+            point_at_pinserver(jade)
         return True
     finally:
         jade.disconnect()
+
+
+def point_at_pinserver(jade):
+    url = os.environ.get("JADE_PINSERVER_URL", "").strip()
+    if not url:
+        return
+    if MODE == "interactive":
+        # "Confirm Oracle" starts on the back arrow; the checkmark to its right keeps the new pinserver.
+        later(3, lambda: press("right", "front"))
+    jade.set_pinserver(urlA=url)
+    log(f"pointed the device at pinserver {url}")
 
 
 def ask_for_passphrase():
@@ -382,6 +406,7 @@ def restrict_to_mainnet():
         # The device replies before it writes the restriction to flash.
         time.sleep(SETTLE_S)
         log("restricted the device to mainnet")
+        point_at_pinserver(jade)
     finally:
         jade.disconnect()
 
