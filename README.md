@@ -807,7 +807,17 @@ simulators `127.0.0.1:30121`; set `JADE_EMULATOR_URL` otherwise, and run
 then finds a "Jade Emulator".
 
 `JADE_MODE=interactive` shows the device's own screens and waits for `./scripts/jade-emulator
-press`, `pin` and `passphrase`; `JADE_MODE=old` runs firmware 1.0.33. See
+press`, `pin` and `passphrase`; `JADE_MODE=old` runs firmware 1.0.33. To check the app's wrong PIN
+and network mismatch messages:
+
+```bash
+JADE_MODE=interactive ./scripts/jade-emulator start   # then tap Connect in the app
+./scripts/jade-emulator pin 999999                    # wrong PIN
+./scripts/jade-emulator pin 012345                    # right PIN
+JADE_NETWORK=mainnet ./scripts/jade-emulator start    # network mismatch with a regtest app
+```
+
+See
 [docs/jade-emulator.md](docs/jade-emulator.md) for the modes, the error recipes and what
 still needs a physical Jade.
 

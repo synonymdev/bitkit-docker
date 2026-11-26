@@ -474,8 +474,17 @@ def status():
     return 0
 
 
+USAGE = "usage: jade-emulator press <left|click|right|front>... | pin <digits> | passphrase <text> | screen <png>"
+
 if __name__ == "__main__":
     command = sys.argv[1] if len(sys.argv) > 1 else "run"
+    args = sys.argv[2:]
+    if command in ("pin", "passphrase", "screen") and len(args) != 1:
+        sys.exit(USAGE)
+    if command == "press" and (not args or set(args) - set(BUTTONS)):
+        sys.exit(USAGE)
+    if command in ("press", "pin", "passphrase", "screen") and MODE != "interactive":
+        sys.exit(f"'{command}' needs the device screen, which only JADE_MODE=interactive serves")
     if command == "run":
         run()
     elif command == "--health":
