@@ -96,6 +96,10 @@ def main():
         subprocess.run(
             [sys.executable, str(CONTROLLER), "setup"], check=True, timeout=120,
         )
+        if os.environ.get("TREZOR_PIN"):
+            subprocess.run(
+                [sys.executable, str(CONTROLLER), "lock"], check=True, timeout=60,
+            )
         READY.touch()
         healthy()
         print("Deterministic Trezor emulator and Bridge are ready", flush=True)

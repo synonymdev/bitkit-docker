@@ -387,17 +387,18 @@ services:
   # Its firmware and Bridge come from the same digest as the manual User Env.
   trezor-emulator:
     profiles: [trezor-emulator]
-    image: bitkit-docker/trezor-emulator:fixture-v1
+    image: bitkit-docker/trezor-emulator:fixture-v2
     build:
       context: ./scripts
       dockerfile: trezor-fixture.Dockerfile
     restart: "no"
     environment:
       MACOS: "1" # use published ports rather than physical USB / host networking
-      TREZOR_MODEL: T2T1
-      TREZOR_FIRMWARE: 2-main # frozen in the pinned base image
+      TREZOR_MODEL: ${TREZOR_MODEL:-T2T1}
+      TREZOR_FIRMWARE: ${TREZOR_FIRMWARE:-2-main} # frozen in the pinned base image
       TREZOR_BRIDGE_VERSION: node-bridge
       TREZOR_MNEMONIC: all all all all all all all all all all all all
+      TREZOR_PIN: ${TREZOR_PIN:-}
       TREZOR_LABEL: Bitkit Test Trezor
       TREZOR_WIPE: "true"
     ports:

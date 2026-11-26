@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Run a seeded, PIN-locked Blockstream Jade emulator (`jade-emulator` profile, `./scripts/jade-emulator`) for every Jade flow in the apps, with its buttons, PIN pad and passphrase keyboard scriptable
+- Lock the emulated Trezor behind a PIN with `TREZOR_PIN`, and enter it with `./scripts/trezor-emulator pin <PIN>`, so the apps' Trezor PIN flows run on an emulator
 - Run a Pubky Swaps provider on this stack's LND and Electrum (`pubky-swaps` profile) for the apps' swap route journeys
 - Run a local Spark regtest network on this chain (`spark` profile, `./spark`): the last public Spark operators and the Spark service provider that matches them, patched for Spark SDK 0.28 wallets, mempool.space, and commands to stop operators, mine to timelock maturity, fund addresses and read an exit's on-chain state
 - Deploy Bitkit's public regtest staging without Blocktank from `staging/`, replacing `*.stag0.blocktank.to`
