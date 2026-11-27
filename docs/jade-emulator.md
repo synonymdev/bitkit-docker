@@ -24,8 +24,9 @@ deterministic test device for Bitkit's Jade flows.
 | `interactive` | 1.0.41, `--dev --psram --webdisplay` | Shows its real screens and waits for buttons: drive it with `press`, `pin` and `screen`. |
 | `old` | 1.0.33, CI build | Auto-confirming firmware older than taproot address support (1.0.34). |
 
-`press` takes `left`, `right`, `click` (wheel press) and `front` (the select button), each
-press 0.25 s apart. The interactive PIN pad starts every digit at 0, so `pin` steps right to
+`press` takes `left`, `right`, `click` (wheel press) and `front` (the select button) and
+presses them one at a time; a press that leaves the screen unchanged (a busy host can drop one)
+is pressed again, up to three times. The interactive PIN pad starts every digit at 0, so `pin` steps right to
 each digit and selects it, waiting on the screen for each digit's box first, so it can run as soon
 as the app asks for the PIN. A digit whose box shows no change after its presses (a pad that just
 appeared can drop them) is pressed again. A wrong `pin` shows the device's own "Incorrect PIN!" screen; the

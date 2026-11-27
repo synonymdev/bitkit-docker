@@ -55,6 +55,8 @@ DRAIN_S = 1
 PIN_PAD_TIMEOUT_S = 30
 PIN_ADVANCE_TIMEOUT_S = 3
 PIN_PRESS_ATTEMPTS = 3
+BUTTON_ATTEMPTS = 3
+BUTTON_ADVANCE_TIMEOUT_S = 3
 FRAME_ATTEMPTS = 3
 TIMEOUT_SCREEN = "/tmp/jade-timeout.png"
 DEVICE = f"tcp:127.0.0.1:{PORT}"
@@ -172,6 +174,31 @@ def is_continue_screen():
     return all(sum(is_green(pixel) for pixel in rows[y]) >= 200 for y in (118, 128))
 
 
+def press_each(*names):
+    """Press buttons one at a time, pressing again when the screen shows no change.
+
+    A busy host can drop a press, and the next ones then land on the wrong screen (a dropped
+    front before right front opens Scan QR instead of Log Out). A press with no visible effect
+    is retried, which for such a press only repeats nothing."""
+    width, height = display_size()
+    size = width * height * 2
+    for name in names:
+        before = read_display_retrying(size)
+        for attempt in range(BUTTON_ATTEMPTS):
+            press(name)
+            deadline = time.monotonic() + BUTTON_ADVANCE_TIMEOUT_S
+            now = read_display_retrying(size)
+            while now == before and time.monotonic() < deadline:
+                time.sleep(0.25)
+                now = read_display_retrying(size)
+            if now != before:
+                break
+            if attempt < BUTTON_ATTEMPTS - 1:
+                log(f"'{name}' left the device screen unchanged; pressing again")
+        else:
+            log(f"'{name}' left the device screen unchanged after {BUTTON_ATTEMPTS} presses")
+
+
 def screen_check(condition):
     # A busy host can stall the display socket for a moment; that only means not ready yet.
     import websocket  # python3-websocket
@@ -227,19 +254,8 @@ def type_pin(pin):
 
 def frame():
     """The display as rows of (r, g, b) tuples."""
-    import websocket  # python3-websocket
-
     width, height = display_size()
-    # A busy host can stall the display socket for a moment, so a read is retried before it fails.
-    for attempt in range(FRAME_ATTEMPTS):
-        try:
-            pixels = read_display(width * height * 2)
-            break
-        except (OSError, websocket.WebSocketException) as error:
-            if attempt == FRAME_ATTEMPTS - 1:
-                raise
-            log(f"device screen unreadable, retrying: {error}")
-            time.sleep(1)
+    pixels = read_display_retrying(width * height * 2)
     rows = []
     for y in range(height):
         row = []
@@ -250,6 +266,20 @@ def frame():
             row.append(((value >> 11 & 0x1F) * 255 // 31, (value >> 5 & 0x3F) * 255 // 63, (value & 0x1F) * 255 // 31))
         rows.append(row)
     return rows
+
+
+def read_display_retrying(size):
+    import websocket  # python3-websocket
+
+    # A busy host can stall the display socket for a moment, so a read is retried before it fails.
+    for attempt in range(FRAME_ATTEMPTS):
+        try:
+            return read_display(size)
+        except (OSError, websocket.WebSocketException) as error:
+            if attempt == FRAME_ATTEMPTS - 1:
+                raise
+            log(f"device screen unreadable, retrying: {error}")
+            time.sleep(1)
 
 
 def read_display(size):
@@ -492,7 +522,7 @@ if __name__ == "__main__":
     elif command == "status":
         sys.exit(status())
     elif command == "press":
-        press(*sys.argv[2:])
+        press_each(*sys.argv[2:])
     elif command == "pin":
         type_pin(sys.argv[2])
     elif command == "passphrase":
