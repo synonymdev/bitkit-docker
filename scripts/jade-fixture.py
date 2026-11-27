@@ -183,13 +183,15 @@ def press_each(*names):
     width, height = display_size()
     size = width * height * 2
     for name in names:
-        before = read_display(size)
+        before = read_display_retrying(size)
         for attempt in range(BUTTON_ATTEMPTS):
             press(name)
             deadline = time.monotonic() + BUTTON_ADVANCE_TIMEOUT_S
-            while read_display(size) == before and time.monotonic() < deadline:
+            now = read_display_retrying(size)
+            while now == before and time.monotonic() < deadline:
                 time.sleep(0.25)
-            if read_display(size) != before:
+                now = read_display_retrying(size)
+            if now != before:
                 break
             if attempt < BUTTON_ATTEMPTS - 1:
                 log(f"'{name}' left the device screen unchanged; pressing again")
@@ -252,19 +254,8 @@ def type_pin(pin):
 
 def frame():
     """The display as rows of (r, g, b) tuples."""
-    import websocket  # python3-websocket
-
     width, height = display_size()
-    # A busy host can stall the display socket for a moment, so a read is retried before it fails.
-    for attempt in range(FRAME_ATTEMPTS):
-        try:
-            pixels = read_display(width * height * 2)
-            break
-        except (OSError, websocket.WebSocketException) as error:
-            if attempt == FRAME_ATTEMPTS - 1:
-                raise
-            log(f"device screen unreadable, retrying: {error}")
-            time.sleep(1)
+    pixels = read_display_retrying(width * height * 2)
     rows = []
     for y in range(height):
         row = []
@@ -275,6 +266,20 @@ def frame():
             row.append(((value >> 11 & 0x1F) * 255 // 31, (value >> 5 & 0x3F) * 255 // 63, (value & 0x1F) * 255 // 31))
         rows.append(row)
     return rows
+
+
+def read_display_retrying(size):
+    import websocket  # python3-websocket
+
+    # A busy host can stall the display socket for a moment, so a read is retried before it fails.
+    for attempt in range(FRAME_ATTEMPTS):
+        try:
+            return read_display(size)
+        except (OSError, websocket.WebSocketException) as error:
+            if attempt == FRAME_ATTEMPTS - 1:
+                raise
+            log(f"device screen unreadable, retrying: {error}")
+            time.sleep(1)
 
 
 def read_display(size):
