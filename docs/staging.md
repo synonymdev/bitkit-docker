@@ -38,7 +38,7 @@ Default branches of bitkit-android, bitkit-ios, bitkit-core, bitkit-e2e-tests an
 | `ssl://electrs.bitkit.stag0…:9999` | android `ElectrumServers.REGTEST.STAG`, ios `electrumServerUrl`; e2e `ELECTRUM_HOST` default and seedkit; bitkit-core onchain tests; android `scripts/electrum-bridge.py` and journeys; bitkit-docker marketplace driver and docs | Electrum | must stay | `ssl://<electrum-host>:9999` |
 | `ssl://fulcrum.bitkit.stag0…:18484` | bitkit-core onchain tests | Electrum (Fulcrum) | must stay | `ssl://<electrum-host>:9999` |
 | `mempool.bitkit.stag0…` | android and ios `blockExplorerUrl`; e2e `regtest-mine.yml` tip check | explorer, chain API | must stay | `https://<mempool-host>` |
-| `bitkit.stag0…/electrs` | nothing on default branches; the Spark chain service reads `bitkit.to/electrs` on mainnet | Esplora REST | must stay | `/electrs` |
+| `bitkit.stag0…/electrs` | nothing on default branches; the Spark chain service reads `api.bitkit.to/electrs` on mainnet | Esplora REST | must stay | `/electrs` |
 | `api.stag0…/blocktank/api/v2/regtest/chain/deposit`, `…/mine` | e2e `fund-address.sh`, `mine-blocks.sh`, `test/helpers` (`BLOCKTANK_URL`), `regtest-mine.yml`, seedkit; bitkit-docker marketplace driver, shop-mixed docs | regtest faucet and miner | must stay | `/regtest/chain/*` |
 | `bitkit.stag0…/backups-ldk` | android and ios `rnBackupServerHost`; e2e migration (the RN app's own staging build) | RN backups | stays while the RN migration is supported | `/backups-ldk` |
 | `api.stag0…/blocktank/api/v2/regtest/channel/pay` | e2e `payInvoice`, `pay-lightning-address.sh` | Blocktank LSP's Lightning node | goes | not hosted; Lightning tests move to Spark on Lightspark's regtest |

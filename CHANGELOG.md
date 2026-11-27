@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Issue payment requests payable through an LNURL-pay endpoint, with a separate proposal expiry
 
 ### Changed
+- Point the staging notes at the mainnet Esplora `api.bitkit.to/electrs`, where Bitkit reads it once its apps move off `bitkit.to`
 - Move the Paykit fixtures (payment request peers, Paykit Server and the driver) to paykit-rs 0.1.1-rc8, the version both apps pin
 - Keep USDT test history on the local fork, pace and cache archive reads, and preserve upstream throttling for retries so ordinary E2E runs need no paid Alchemy features
 - Pin the local USDT gateway to `299ecba`, including shared token pricing and preparation limits; raise preparation limits only in the local Compose profile
