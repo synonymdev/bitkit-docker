@@ -6,7 +6,7 @@ explains how to use it.
 | Path | What it is |
 | --- | --- |
 | `compose.yml` | Every Spark service, prefixed `spark-`, in the `spark` profile |
-| `operator.dockerfile`, `operator-status-filter.patch` | The operator from `breez/spark@b54845c`, patched |
+| `operator.dockerfile`, `operator-status-filter.patch`, `operator-adaptor-v2.patch` | The operator from `breez/spark@b54845c`, patched |
 | `sspd.dockerfile`, `sspd-silent-payment-proof.patch` | The SSP from `breez/spark-sdk@7b6124227`, with upstream's `ce29ca045` |
 | `migrations.dockerfile` | The operators' database schema from the same commit |
 | `tools.dockerfile`, `scripts/` | The image the setup scripts run in, with the SSP's and the Lightning nodes' CLIs |

@@ -14,7 +14,7 @@ mine to timelock maturity. Shared CI and staging stay on Lightspark's hosted reg
 
 | Part | Version |
 | --- | --- |
-| Operators | `breez/spark@b54845c`, the last public operator commit, with `spark-regtest/operator-status-filter.patch` |
+| Operators | `breez/spark@b54845c`, the last public operator commit, with `spark-regtest/operator-status-filter.patch` and `spark-regtest/operator-adaptor-v2.patch` |
 | SSP, Lightning nodes, LNURL server | `breez/spark-sdk@7b6124227`, the last commit on that operator, with `spark-regtest/sspd-silent-payment-proof.patch` |
 | data-sync | `breez/data-sync@adaa7b1` |
 | Chain | `spark-bitcoind` (Bitcoin Core 31.0), peered with bitkit-docker's `bitcoind` |
@@ -25,8 +25,13 @@ mine to timelock maturity. Shared CI and staging stay on Lightspark's hosted reg
   `spark-bitcoind` follows the same chain over P2P, so Savings, LND and Spark see the same blocks.
 - **Mine with `./spark mine`.** A block mined on `bitcoind` (`./bitcoin-cli mine`) leaves Spark's transactions waiting
   in `spark-bitcoind`'s mempool. A block mined with `./spark` holds both nodes' transactions.
-- **Why this operator.** Breez's current operator image is private. The patch makes the 1 Oct operator skip a tree node
-  status SDK 0.27 and later ask for (`RETURNED`), which it never stores. Without it, wallet sync fails.
+- **Why this operator.** Breez's current operator image is private. Two patches fit the 1 Oct operator to current
+  wallets:
+  - It skips a tree node status SDK 0.27 and later ask for (`RETURNED`), which it never stores. Without it, wallet sync
+    fails.
+  - It signs leaf swaps with version 2 adaptors, which SDK 0.28.3 uses (the adaptor point joins the FROST binding
+    factors). Without it, every swap fails ("unable to validate adaptor signature"), so a send pays only an amount
+    that existing leaves sum to exactly. The SSP's own swap leg stays on version 1.
 - **Why this SSP.** A newer SSP cannot talk to that operator. The SSP's patch is upstream's `silent_payment_proof` field
   (always null), which Spark SDK 0.28 asks for.
 - **Builds.** The images build from the pinned sources on the first `./spark up`, which takes a while (Rust and Go).
